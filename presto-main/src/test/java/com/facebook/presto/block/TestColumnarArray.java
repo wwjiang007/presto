@@ -11,22 +11,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.spi.block;
+package com.facebook.presto.block;
 
+import com.facebook.presto.spi.block.ArrayBlockBuilder;
+import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.block.ColumnarArray;
+import com.facebook.presto.spi.block.DictionaryBlock;
+import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.testng.annotations.Test;
 
 import java.lang.reflect.Array;
+import java.util.Arrays;
 
+import static com.facebook.presto.block.ColumnarTestUtils.alternatingNullValues;
+import static com.facebook.presto.block.ColumnarTestUtils.assertBlock;
+import static com.facebook.presto.block.ColumnarTestUtils.assertBlockPosition;
+import static com.facebook.presto.block.ColumnarTestUtils.createTestDictionaryBlock;
+import static com.facebook.presto.block.ColumnarTestUtils.createTestDictionaryExpectedValues;
+import static com.facebook.presto.block.ColumnarTestUtils.createTestRleBlock;
+import static com.facebook.presto.block.ColumnarTestUtils.createTestRleExpectedValues;
 import static com.facebook.presto.spi.block.ColumnarArray.toColumnarArray;
-import static com.facebook.presto.spi.block.ColumnarTestUtils.alternatingNullValues;
-import static com.facebook.presto.spi.block.ColumnarTestUtils.assertBlock;
-import static com.facebook.presto.spi.block.ColumnarTestUtils.assertBlockPosition;
-import static com.facebook.presto.spi.block.ColumnarTestUtils.createTestDictionaryBlock;
-import static com.facebook.presto.spi.block.ColumnarTestUtils.createTestDictionaryExpectedValues;
-import static com.facebook.presto.spi.block.ColumnarTestUtils.createTestRleBlock;
-import static com.facebook.presto.spi.block.ColumnarTestUtils.createTestRleExpectedValues;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static org.testng.Assert.assertEquals;
 
@@ -63,6 +70,17 @@ public class TestColumnarArray
         assertColumnarArray(block, expectedValues);
         assertDictionaryBlock(block, expectedValues);
         assertRunLengthEncodedBlock(block, expectedValues);
+
+        int offset = 1;
+        int length = expectedValues.length - 2;
+        Block blockRegion = block.getRegion(offset, length);
+        T[] expectedValuesRegion = Arrays.copyOfRange(expectedValues, offset, offset + length);
+
+        assertBlock(blockRegion, expectedValuesRegion);
+
+        assertColumnarArray(blockRegion, expectedValuesRegion);
+        assertDictionaryBlock(blockRegion, expectedValuesRegion);
+        assertRunLengthEncodedBlock(blockRegion, expectedValuesRegion);
     }
 
     private static <T> void assertDictionaryBlock(Block block, T[] expectedValues)
