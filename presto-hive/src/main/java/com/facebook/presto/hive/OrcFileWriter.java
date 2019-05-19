@@ -13,8 +13,10 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.orc.OrcDataSink;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcEncoding;
+import com.facebook.presto.orc.OrcWriteValidation.OrcWriteValidationMode;
 import com.facebook.presto.orc.OrcWriter;
 import com.facebook.presto.orc.OrcWriterOptions;
 import com.facebook.presto.orc.OrcWriterStats;
@@ -26,14 +28,13 @@ import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-import com.google.common.io.CountingOutputStream;
-import io.airlift.slice.OutputStreamSliceOutput;
 import org.joda.time.DateTimeZone;
 import org.openjdk.jol.info.ClassLayout;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,16 +51,18 @@ public class OrcFileWriter
         implements HiveFileWriter
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(OrcFileWriter.class).instanceSize();
+    private static final ThreadMXBean THREAD_MX_BEAN = ManagementFactory.getThreadMXBean();
 
-    private final CountingOutputStream outputStream;
     private final OrcWriter orcWriter;
     private final Callable<Void> rollbackAction;
     private final int[] fileInputColumnIndexes;
     private final List<Block> nullBlocks;
     private final Optional<Supplier<OrcDataSource>> validationInputFactory;
 
+    private long validationCpuNanos;
+
     public OrcFileWriter(
-            OutputStream outputStream,
+            OrcDataSink orcDataSink,
             Callable<Void> rollbackAction,
             OrcEncoding orcEncoding,
             List<String> columnNames,
@@ -70,12 +73,13 @@ public class OrcFileWriter
             Map<String, String> metadata,
             DateTimeZone hiveStorageTimeZone,
             Optional<Supplier<OrcDataSource>> validationInputFactory,
+            OrcWriteValidationMode validationMode,
             OrcWriterStats stats)
     {
-        this.outputStream = new CountingOutputStream(outputStream);
+        requireNonNull(orcDataSink, "orcDataSink is null");
 
         orcWriter = new OrcWriter(
-                new OutputStreamSliceOutput(this.outputStream),
+                orcDataSink,
                 columnNames,
                 fileColumnTypes,
                 orcEncoding,
@@ -84,6 +88,7 @@ public class OrcFileWriter
                 metadata,
                 hiveStorageTimeZone,
                 validationInputFactory.isPresent(),
+                validationMode,
                 stats);
         this.rollbackAction = requireNonNull(rollbackAction, "rollbackAction is null");
 
@@ -102,7 +107,7 @@ public class OrcFileWriter
     @Override
     public long getWrittenBytes()
     {
-        return outputStream.getCount();
+        return orcWriter.getWrittenBytes() + orcWriter.getBufferedBytes();
     }
 
     @Override
@@ -152,7 +157,9 @@ public class OrcFileWriter
         if (validationInputFactory.isPresent()) {
             try {
                 try (OrcDataSource input = validationInputFactory.get().get()) {
+                    long startThreadCpuTime = THREAD_MX_BEAN.getCurrentThreadCpuTime();
                     orcWriter.validate(input);
+                    validationCpuNanos += THREAD_MX_BEAN.getCurrentThreadCpuTime() - startThreadCpuTime;
                 }
             }
             catch (IOException | UncheckedIOException e) {
@@ -175,6 +182,12 @@ public class OrcFileWriter
         catch (Exception e) {
             throw new PrestoException(HIVE_WRITER_CLOSE_ERROR, "Error rolling back write to Hive", e);
         }
+    }
+
+    @Override
+    public long getValidationCpuNanos()
+    {
+        return validationCpuNanos;
     }
 
     @Override

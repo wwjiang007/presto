@@ -14,13 +14,15 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.planner.PartitioningScheme;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.SymbolsExtractor;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
@@ -48,6 +50,9 @@ import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SetOperationNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.SortNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
+import com.facebook.presto.sql.planner.plan.StatisticAggregations;
+import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
@@ -58,7 +63,6 @@ import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.tree.FunctionCall;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -78,7 +82,10 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.extractUnique;
 import static com.facebook.presto.sql.planner.optimizations.QueryCardinalityUtil.isScalar;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.isExpression;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.concat;
@@ -100,7 +107,7 @@ public class PruneUnreferencedOutputs
         implements PlanOptimizer
 {
     @Override
-    public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
+    public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         requireNonNull(plan, "plan is null");
         requireNonNull(session, "session is null");
@@ -127,6 +134,7 @@ public class PruneUnreferencedOutputs
             node.getPartitioningScheme().getHashColumn().ifPresent(expectedOutputSymbols::add);
             node.getPartitioningScheme().getPartitioning().getColumns().stream()
                     .forEach(expectedOutputSymbols::add);
+            node.getOrderingScheme().ifPresent(orderingScheme -> expectedOutputSymbols.addAll(orderingScheme.getOrderBy()));
 
             List<List<Symbol>> inputsBySource = new ArrayList<>(node.getInputs().size());
             for (int i = 0; i < node.getInputs().size(); i++) {
@@ -144,7 +152,7 @@ public class PruneUnreferencedOutputs
                 }
             }
 
-            // newOutputSymbols contains all partition and hash symbols so simply swap the output layout
+            // newOutputSymbols contains all partition, sort and hash symbols so simply swap the output layout
             PartitioningScheme partitioningScheme = new PartitioningScheme(
                     node.getPartitioningScheme().getPartitioning(),
                     newOutputSymbols,
@@ -168,7 +176,8 @@ public class PruneUnreferencedOutputs
                     node.getScope(),
                     partitioningScheme,
                     rewrittenSources.build(),
-                    inputsBySource);
+                    inputsBySource,
+                    node.getOrderingScheme());
         }
 
         @Override
@@ -177,7 +186,7 @@ public class PruneUnreferencedOutputs
             Set<Symbol> expectedFilterInputs = new HashSet<>();
             if (node.getFilter().isPresent()) {
                 expectedFilterInputs = ImmutableSet.<Symbol>builder()
-                        .addAll(SymbolsExtractor.extractUnique(node.getFilter().get()))
+                        .addAll(SymbolsExtractor.extractUnique(castToExpression(node.getFilter().get())))
                         .addAll(context.get())
                         .build();
             }
@@ -211,10 +220,9 @@ public class PruneUnreferencedOutputs
                         .build();
             }
             else {
-                Set<Symbol> seenSymbol = new HashSet<>();
                 outputSymbols = node.getOutputSymbols().stream()
                         .filter(context.get()::contains)
-                        .filter(seenSymbol::add)
+                        .distinct()
                         .collect(toImmutableList());
             }
 
@@ -250,6 +258,38 @@ public class PruneUnreferencedOutputs
                     node.getSourceHashSymbol(),
                     node.getFilteringSourceHashSymbol(),
                     node.getDistributionType());
+        }
+
+        @Override
+        public PlanNode visitSpatialJoin(SpatialJoinNode node, RewriteContext<Set<Symbol>> context)
+        {
+            Set<Symbol> filterSymbols;
+            if (isExpression(node.getFilter())) {
+                filterSymbols = SymbolsExtractor.extractUnique(castToExpression(node.getFilter()));
+            }
+            else {
+                filterSymbols = SymbolsExtractor.extractUnique(node.getFilter());
+            }
+            Set<Symbol> requiredInputs = ImmutableSet.<Symbol>builder()
+                    .addAll(filterSymbols)
+                    .addAll(context.get())
+                    .build();
+
+            ImmutableSet.Builder<Symbol> leftInputs = ImmutableSet.builder();
+            node.getLeftPartitionSymbol().map(leftInputs::add);
+
+            ImmutableSet.Builder<Symbol> rightInputs = ImmutableSet.builder();
+            node.getRightPartitionSymbol().map(rightInputs::add);
+
+            PlanNode left = context.rewrite(node.getLeft(), leftInputs.addAll(requiredInputs).build());
+            PlanNode right = context.rewrite(node.getRight(), rightInputs.addAll(requiredInputs).build());
+
+            List<Symbol> outputSymbols = node.getOutputSymbols().stream()
+                    .filter(context.get()::contains)
+                    .distinct()
+                    .collect(toImmutableList());
+
+            return new SpatialJoinNode(node.getId(), node.getType(), left, right, outputSymbols, node.getFilter(), node.getLeftPartitionSymbol(), node.getRightPartitionSymbol(), node.getKdbTree());
         }
 
         @Override
@@ -291,7 +331,7 @@ public class PruneUnreferencedOutputs
             Map<Symbol, ColumnHandle> newAssignments = newOutputSymbols.stream()
                     .collect(Collectors.toMap(Function.identity(), node.getAssignments()::get));
 
-            return new IndexSourceNode(node.getId(), node.getIndexHandle(), node.getTableHandle(), node.getLayout(), newLookupSymbols, newOutputSymbols, newAssignments, node.getCurrentConstraint());
+            return new IndexSourceNode(node.getId(), node.getIndexHandle(), node.getTableHandle(), newLookupSymbols, newOutputSymbols, newAssignments, node.getCurrentConstraint());
         }
 
         @Override
@@ -309,7 +349,7 @@ public class PruneUnreferencedOutputs
 
                 if (context.get().contains(symbol)) {
                     Aggregation aggregation = entry.getValue();
-                    expectedInputs.addAll(SymbolsExtractor.extractUnique(aggregation.getCall()));
+                    expectedInputs.addAll(extractUnique(aggregation));
                     aggregation.getMask().ifPresent(expectedInputs::add);
                     aggregations.put(symbol, aggregation);
                 }
@@ -321,6 +361,7 @@ public class PruneUnreferencedOutputs
                     source,
                     aggregations.build(),
                     node.getGroupingSets(),
+                    ImmutableList.of(),
                     node.getStep(),
                     node.getHashSymbol(),
                     node.getGroupIdSymbol());
@@ -356,9 +397,7 @@ public class PruneUnreferencedOutputs
                 WindowNode.Function function = entry.getValue();
 
                 if (context.get().contains(symbol)) {
-                    FunctionCall call = function.getFunctionCall();
-                    expectedInputs.addAll(SymbolsExtractor.extractUnique(call));
-
+                    expectedInputs.addAll(WindowNodeUtil.extractWindowFunctionUnique(function));
                     functionsBuilder.put(symbol, entry.getValue());
                 }
             }
@@ -396,16 +435,15 @@ public class PruneUnreferencedOutputs
                     node.getTable(),
                     newOutputs,
                     newAssignments,
-                    node.getLayout(),
                     node.getCurrentConstraint(),
-                    node.getOriginalConstraint());
+                    node.getEnforcedConstraint());
         }
 
         @Override
         public PlanNode visitFilter(FilterNode node, RewriteContext<Set<Symbol>> context)
         {
             Set<Symbol> expectedInputs = ImmutableSet.<Symbol>builder()
-                    .addAll(SymbolsExtractor.extractUnique(node.getPredicate()))
+                    .addAll(SymbolsExtractor.extractUnique(castToExpression(node.getPredicate())))
                     .addAll(context.get())
                     .build();
 
@@ -419,10 +457,10 @@ public class PruneUnreferencedOutputs
         {
             ImmutableSet.Builder<Symbol> expectedInputs = ImmutableSet.builder();
 
-            Map<Symbol, Symbol> newArgumentMappings = node.getArgumentMappings().entrySet().stream()
-                    .filter(entry -> context.get().contains(entry.getKey()))
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-            expectedInputs.addAll(newArgumentMappings.values());
+            List<Symbol> newAggregationArguments = node.getAggregationArguments().stream()
+                    .filter(context.get()::contains)
+                    .collect(Collectors.toList());
+            expectedInputs.addAll(newAggregationArguments);
 
             ImmutableList.Builder<List<Symbol>> newGroupingSets = ImmutableList.builder();
             Map<Symbol, Symbol> newGroupingMapping = new HashMap<>();
@@ -433,15 +471,15 @@ public class PruneUnreferencedOutputs
                 for (Symbol output : groupingSet) {
                     if (context.get().contains(output)) {
                         newGroupingSet.add(output);
-                        newGroupingMapping.putIfAbsent(output, node.getGroupingSetMappings().get(output));
-                        expectedInputs.add(node.getGroupingSetMappings().get(output));
+                        newGroupingMapping.putIfAbsent(output, node.getGroupingColumns().get(output));
+                        expectedInputs.add(node.getGroupingColumns().get(output));
                     }
                 }
                 newGroupingSets.add(newGroupingSet.build());
             }
 
             PlanNode source = context.rewrite(node.getSource(), expectedInputs.build());
-            return new GroupIdNode(node.getId(), source, newGroupingSets.build(), newGroupingMapping, newArgumentMappings, node.getGroupIdSymbol());
+            return new GroupIdNode(node.getId(), source, newGroupingSets.build(), newGroupingMapping, newAggregationArguments, node.getGroupIdSymbol());
         }
 
         @Override
@@ -491,15 +529,12 @@ public class PruneUnreferencedOutputs
             ImmutableSet.Builder<Symbol> expectedInputs = ImmutableSet.builder();
 
             Assignments.Builder builder = Assignments.builder();
-            for (int i = 0; i < node.getOutputSymbols().size(); i++) {
-                Symbol output = node.getOutputSymbols().get(i);
-                Expression expression = node.getAssignments().get(output);
-
-                if (context.get().contains(output)) {
+            node.getAssignments().forEach((symbol, expression) -> {
+                if (context.get().contains(symbol)) {
                     expectedInputs.addAll(SymbolsExtractor.extractUnique(expression));
-                    builder.put(output, expression);
+                    builder.put(symbol, expression);
                 }
-            }
+            });
 
             PlanNode source = context.rewrite(node.getSource(), expectedInputs.build());
 
@@ -604,28 +639,52 @@ public class PruneUnreferencedOutputs
                     .addAll(node.getColumns());
             if (node.getPartitioningScheme().isPresent()) {
                 PartitioningScheme partitioningScheme = node.getPartitioningScheme().get();
-                partitioningScheme.getPartitioning().getColumns().stream()
-                        .forEach(expectedInputs::add);
+                partitioningScheme.getPartitioning().getColumns().forEach(expectedInputs::add);
                 partitioningScheme.getHashColumn().ifPresent(expectedInputs::add);
             }
+            if (node.getStatisticsAggregation().isPresent()) {
+                StatisticAggregations aggregations = node.getStatisticsAggregation().get();
+                expectedInputs.addAll(aggregations.getGroupingSymbols());
+                aggregations.getAggregations().values().forEach(aggregation -> expectedInputs.addAll(extractUnique(aggregation)));
+            }
             PlanNode source = context.rewrite(node.getSource(), expectedInputs.build());
-
             return new TableWriterNode(
                     node.getId(),
                     source,
                     node.getTarget(),
+                    node.getRowCountSymbol(),
+                    node.getFragmentSymbol(),
                     node.getColumns(),
                     node.getColumnNames(),
-                    node.getOutputSymbols(),
-                    node.getPartitioningScheme());
+                    node.getPartitioningScheme(),
+                    node.getStatisticsAggregation(),
+                    node.getStatisticsAggregationDescriptor());
+        }
+
+        @Override
+        public PlanNode visitStatisticsWriterNode(StatisticsWriterNode node, RewriteContext<Set<Symbol>> context)
+        {
+            PlanNode source = context.rewrite(node.getSource(), ImmutableSet.copyOf(node.getSource().getOutputSymbols()));
+            return new StatisticsWriterNode(
+                    node.getId(),
+                    source,
+                    node.getTarget(),
+                    node.getRowCountSymbol(),
+                    node.isRowCountEnabled(),
+                    node.getDescriptor());
         }
 
         @Override
         public PlanNode visitTableFinish(TableFinishNode node, RewriteContext<Set<Symbol>> context)
         {
-            // Maintain the existing inputs needed for TableCommitNode
             PlanNode source = context.rewrite(node.getSource(), ImmutableSet.copyOf(node.getSource().getOutputSymbols()));
-            return new TableFinishNode(node.getId(), source, node.getTarget(), node.getOutputSymbols());
+            return new TableFinishNode(
+                    node.getId(),
+                    source,
+                    node.getTarget(),
+                    node.getRowCountSymbol(),
+                    node.getStatisticsAggregation(),
+                    node.getStatisticsAggregationDescriptor());
         }
 
         @Override
@@ -689,12 +748,12 @@ public class PruneUnreferencedOutputs
         public PlanNode visitValues(ValuesNode node, RewriteContext<Set<Symbol>> context)
         {
             ImmutableList.Builder<Symbol> rewrittenOutputSymbolsBuilder = ImmutableList.builder();
-            ImmutableList.Builder<ImmutableList.Builder<Expression>> rowBuildersBuilder = ImmutableList.builder();
+            ImmutableList.Builder<ImmutableList.Builder<RowExpression>> rowBuildersBuilder = ImmutableList.builder();
             // Initialize builder for each row
             for (int i = 0; i < node.getRows().size(); i++) {
                 rowBuildersBuilder.add(ImmutableList.builder());
             }
-            ImmutableList<ImmutableList.Builder<Expression>> rowBuilders = rowBuildersBuilder.build();
+            ImmutableList<ImmutableList.Builder<RowExpression>> rowBuilders = rowBuildersBuilder.build();
             for (int i = 0; i < node.getOutputSymbols().size(); i++) {
                 Symbol outputSymbol = node.getOutputSymbols().get(i);
                 // If output symbol is used
@@ -706,8 +765,8 @@ public class PruneUnreferencedOutputs
                     }
                 }
             }
-            List<List<Expression>> rewrittenRows = rowBuilders.stream()
-                    .map((rowBuilder) -> rowBuilder.build())
+            List<List<RowExpression>> rewrittenRows = rowBuilders.stream()
+                    .map(ImmutableList.Builder::build)
                     .collect(toImmutableList());
             return new ValuesNode(node.getId(), rewrittenOutputSymbolsBuilder.build(), rewrittenRows);
         }
@@ -747,7 +806,7 @@ public class PruneUnreferencedOutputs
                     .addAll(subqueryAssignmentsSymbols) // need to include those: e.g: "expr" from "expr IN (SELECT 1)"
                     .build();
             PlanNode input = context.rewrite(node.getInput(), inputContext);
-            return new ApplyNode(node.getId(), input, subquery, subqueryAssignments.build(), newCorrelation, node.getOriginSubquery());
+            return new ApplyNode(node.getId(), input, subquery, subqueryAssignments.build(), newCorrelation, node.getOriginSubqueryError());
         }
 
         @Override
@@ -786,7 +845,7 @@ public class PruneUnreferencedOutputs
                 return subquery;
             }
 
-            return new LateralJoinNode(node.getId(), input, subquery, newCorrelation, node.getType(), node.getOriginSubquery());
+            return new LateralJoinNode(node.getId(), input, subquery, newCorrelation, node.getType(), node.getOriginSubqueryError());
         }
     }
 }

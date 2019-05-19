@@ -43,24 +43,31 @@ public abstract class AbstractSingleRowBlock
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
         checkFieldIndex(position);
-        return getRawFieldBlock(position).getByte(rowIndex, offset);
+        return getRawFieldBlock(position).getByte(rowIndex);
     }
 
     @Override
-    public short getShort(int position, int offset)
+    public short getShort(int position)
     {
         checkFieldIndex(position);
-        return getRawFieldBlock(position).getShort(rowIndex, offset);
+        return getRawFieldBlock(position).getShort(rowIndex);
     }
 
     @Override
-    public int getInt(int position, int offset)
+    public int getInt(int position)
     {
         checkFieldIndex(position);
-        return getRawFieldBlock(position).getInt(rowIndex, offset);
+        return getRawFieldBlock(position).getInt(rowIndex);
+    }
+
+    @Override
+    public long getLong(int position)
+    {
+        checkFieldIndex(position);
+        return getRawFieldBlock(position).getLong(rowIndex);
     }
 
     @Override
@@ -148,7 +155,20 @@ public abstract class AbstractSingleRowBlock
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        checkFieldIndex(position);
+        return getRawFieldBlock(position).getEstimatedDataSizeForStats(rowIndex);
+    }
+
+    @Override
     public long getRegionSizeInBytes(int position, int length)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
     {
         throw new UnsupportedOperationException();
     }

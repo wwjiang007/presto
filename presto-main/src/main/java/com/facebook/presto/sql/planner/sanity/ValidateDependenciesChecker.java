@@ -14,11 +14,13 @@
 package com.facebook.presto.sql.planner.sanity;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolsExtractor;
+import com.facebook.presto.sql.planner.TypeProvider;
+import com.facebook.presto.sql.planner.optimizations.WindowNodeUtil;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
@@ -49,6 +51,9 @@ import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SetOperationNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
+import com.facebook.presto.sql.planner.plan.StatisticAggregationsDescriptor;
+import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
 import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
@@ -63,14 +68,18 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.sql.planner.optimizations.AggregationNodeUtils.extractUnique;
 import static com.facebook.presto.sql.planner.optimizations.IndexJoinOptimizer.IndexKeyTracer;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.isExpression;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
 /**
@@ -80,7 +89,7 @@ public final class ValidateDependenciesChecker
         implements PlanSanityChecker.Checker
 {
     @Override
-    public void validate(PlanNode plan, Session session, Metadata metadata, SqlParser sqlParser, Map<Symbol, Type> types)
+    public void validate(PlanNode plan, Session session, Metadata metadata, SqlParser sqlParser, TypeProvider types, WarningCollector warningCollector)
     {
         validate(plan);
     }
@@ -118,7 +127,7 @@ public final class ValidateDependenciesChecker
             checkDependencies(inputs, node.getGroupingKeys(), "Invalid node. Grouping key symbols (%s) not in source plan output (%s)", node.getGroupingKeys(), node.getSource().getOutputSymbols());
 
             for (Aggregation aggregation : node.getAggregations().values()) {
-                Set<Symbol> dependencies = SymbolsExtractor.extractUnique(aggregation.getCall());
+                Set<Symbol> dependencies = extractUnique(aggregation);
                 checkDependencies(inputs, dependencies, "Invalid node. Aggregation dependencies (%s) not in source plan output (%s)", dependencies, node.getSource().getOutputSymbols());
                 aggregation.getMask().ifPresent(mask -> {
                     checkDependencies(inputs, ImmutableSet.of(mask), "Invalid node. Aggregation mask symbol (%s) not in source plan output (%s)", mask, node.getSource().getOutputSymbols());
@@ -179,7 +188,7 @@ public final class ValidateDependenciesChecker
             checkDependencies(inputs, bounds.build(), "Invalid node. Frame bounds (%s) not in source plan output (%s)", bounds.build(), node.getSource().getOutputSymbols());
 
             for (WindowNode.Function function : node.getWindowFunctions().values()) {
-                Set<Symbol> dependencies = SymbolsExtractor.extractUnique(function.getFunctionCall());
+                Set<Symbol> dependencies = WindowNodeUtil.extractWindowFunctionUnique(function);
                 checkDependencies(inputs, dependencies, "Invalid node. Window function dependencies (%s) not in source plan output (%s)", dependencies, node.getSource().getOutputSymbols());
             }
 
@@ -223,7 +232,13 @@ public final class ValidateDependenciesChecker
             Set<Symbol> inputs = createInputs(source, boundSymbols);
             checkDependencies(inputs, node.getOutputSymbols(), "Invalid node. Output symbols (%s) not in source plan output (%s)", node.getOutputSymbols(), node.getSource().getOutputSymbols());
 
-            Set<Symbol> dependencies = SymbolsExtractor.extractUnique(node.getPredicate());
+            Set<Symbol> dependencies;
+            if (isExpression(node.getPredicate())) {
+                dependencies = SymbolsExtractor.extractUnique(castToExpression(node.getPredicate()));
+            }
+            else {
+                dependencies = SymbolsExtractor.extractUnique(node.getPredicate());
+            }
             checkDependencies(inputs, dependencies, "Invalid node. Predicate dependencies (%s) not in source plan output (%s)", dependencies, node.getSource().getOutputSymbols());
 
             return null;
@@ -338,7 +353,13 @@ public final class ValidateDependenciesChecker
             }
 
             node.getFilter().ifPresent(predicate -> {
-                Set<Symbol> predicateSymbols = SymbolsExtractor.extractUnique(predicate);
+                Set<Symbol> predicateSymbols;
+                if (isExpression(predicate)) {
+                    predicateSymbols = SymbolsExtractor.extractUnique(castToExpression(predicate));
+                }
+                else {
+                    predicateSymbols = SymbolsExtractor.extractUnique(predicate);
+                }
                 checkArgument(
                         allInputs.containsAll(predicateSymbols),
                         "Symbol from filter (%s) not in sources (%s)",
@@ -346,28 +367,7 @@ public final class ValidateDependenciesChecker
                         allInputs);
             });
 
-            checkDependencies(allInputs, node.getOutputSymbols(), "Symbol from join output (%s) not in sources (%s)", node.getOutputSymbols(), allInputs);
-
-            List<Integer> rightSymbolIndexes = node.getRight().getOutputSymbols().stream()
-                    .filter(symbol -> node.getOutputSymbols().contains(symbol))
-                    .map(symbol -> node.getOutputSymbols().indexOf(symbol))
-                    .collect(toImmutableList());
-
-            boolean allLeftBeforeRight = node.getLeft().getOutputSymbols().stream()
-                    .filter(symbol -> node.getOutputSymbols().contains(symbol))
-                    .map(symbol -> node.getOutputSymbols().indexOf(symbol))
-                    .allMatch(leftIndex -> rightSymbolIndexes.stream()
-                            .allMatch(rightIndex -> rightIndex > leftIndex));
-            checkState(allLeftBeforeRight, "Not all left output symbols are before right output symbols");
-
-            if (node.isCrossJoin()) {
-                List<Symbol> allInputsOrdered = ImmutableList.<Symbol>builder()
-                        .addAll(node.getLeft().getOutputSymbols())
-                        .addAll(node.getRight().getOutputSymbols())
-                        .build();
-                checkState(allInputsOrdered.equals(node.getOutputSymbols()), "Outputs symbols (%s) for cross join do not match ordered input symbols (%s)", node.getOutputSymbols(), allInputsOrdered);
-            }
-
+            checkLeftOutputSymbolsBeforeRight(node.getLeft().getOutputSymbols(), node.getOutputSymbols());
             return null;
         }
 
@@ -388,6 +388,54 @@ public final class ValidateDependenciesChecker
                     node.getSemiJoinOutput());
 
             return null;
+        }
+
+        @Override
+        public Void visitSpatialJoin(SpatialJoinNode node, Set<Symbol> boundSymbols)
+        {
+            node.getLeft().accept(this, boundSymbols);
+            node.getRight().accept(this, boundSymbols);
+
+            Set<Symbol> leftInputs = createInputs(node.getLeft(), boundSymbols);
+            Set<Symbol> rightInputs = createInputs(node.getRight(), boundSymbols);
+            Set<Symbol> allInputs = ImmutableSet.<Symbol>builder()
+                    .addAll(leftInputs)
+                    .addAll(rightInputs)
+                    .build();
+
+            Set<Symbol> predicateSymbols;
+            if (isExpression(node.getFilter())) {
+                predicateSymbols = SymbolsExtractor.extractUnique(castToExpression(node.getFilter()));
+            }
+            else {
+                predicateSymbols = SymbolsExtractor.extractUnique(node.getFilter());
+            }
+
+            checkArgument(
+                    allInputs.containsAll(predicateSymbols),
+                    "Symbol from filter (%s) not in sources (%s)",
+                    predicateSymbols,
+                    allInputs);
+
+            checkLeftOutputSymbolsBeforeRight(node.getLeft().getOutputSymbols(), node.getOutputSymbols());
+            return null;
+        }
+
+        private void checkLeftOutputSymbolsBeforeRight(List<Symbol> leftSymbols, List<Symbol> outputSymbols)
+        {
+            int leftMaxPosition = -1;
+            Optional<Integer> rightMinPosition = Optional.empty();
+            Set<Symbol> leftSymbolsSet = new HashSet<>(leftSymbols);
+            for (int i = 0; i < outputSymbols.size(); i++) {
+                Symbol symbol = outputSymbols.get(i);
+                if (leftSymbolsSet.contains(symbol)) {
+                    leftMaxPosition = i;
+                }
+                else if (!rightMinPosition.isPresent()) {
+                    rightMinPosition = Optional.of(i);
+                }
+            }
+            checkState(!rightMinPosition.isPresent() || rightMinPosition.get() > leftMaxPosition, "Not all left output symbols are before right output symbols");
         }
 
         @Override
@@ -426,14 +474,20 @@ public final class ValidateDependenciesChecker
         @Override
         public Void visitTableScan(TableScanNode node, Set<Symbol> boundSymbols)
         {
-            checkArgument(node.getAssignments().keySet().containsAll(node.getOutputSymbols()), "Assignments must contain mappings for output symbols");
-
+            //We don't have to do a check here as TableScanNode has no dependencies.
             return null;
         }
 
         @Override
         public Void visitValues(ValuesNode node, Set<Symbol> boundSymbols)
         {
+            Set<Symbol> correlatedDependencies = SymbolsExtractor.extractUnique(node);
+            checkDependencies(
+                    boundSymbols,
+                    correlatedDependencies,
+                    "Invalid node. Expression correlated dependencies (%s) not satisfied by (%s)",
+                    correlatedDependencies,
+                    boundSymbols);
             return null;
         }
 
@@ -496,6 +550,22 @@ public final class ValidateDependenciesChecker
         @Override
         public Void visitMetadataDelete(MetadataDeleteNode node, Set<Symbol> boundSymbols)
         {
+            return null;
+        }
+
+        @Override
+        public Void visitStatisticsWriterNode(StatisticsWriterNode node, Set<Symbol> boundSymbols)
+        {
+            node.getSource().accept(this, boundSymbols); // visit child
+
+            StatisticAggregationsDescriptor<Symbol> descriptor = node.getDescriptor();
+            Set<Symbol> dependencies = ImmutableSet.<Symbol>builder()
+                    .addAll(descriptor.getGrouping().values())
+                    .addAll(descriptor.getColumnStatistics().values())
+                    .addAll(descriptor.getTableStatistics().values())
+                    .build();
+            List<Symbol> outputSymbols = node.getSource().getOutputSymbols();
+            checkDependencies(dependencies, dependencies, "Invalid node. Dependencies (%s) not in source plan output (%s)", dependencies, outputSymbols);
             return null;
         }
 

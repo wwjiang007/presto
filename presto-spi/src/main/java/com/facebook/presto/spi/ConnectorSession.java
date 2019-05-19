@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.spi;
 
-import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.ConnectorIdentity;
 import com.facebook.presto.spi.type.TimeZoneKey;
 
 import java.util.Locale;
@@ -30,19 +30,18 @@ public interface ConnectorSession
         return getIdentity().getUser();
     }
 
-    Identity getIdentity();
+    ConnectorIdentity getIdentity();
 
     TimeZoneKey getTimeZoneKey();
 
     Locale getLocale();
 
+    Optional<String> getTraceToken();
+
     long getStartTime();
 
     @Deprecated
     boolean isLegacyTimestamp();
-
-    @Deprecated
-    boolean isLegacyRoundNBigint();
 
     <T> T getProperty(String name, Class<T> type);
 }

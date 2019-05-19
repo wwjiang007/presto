@@ -15,16 +15,22 @@ package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.SymbolsExtractor;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
+import com.facebook.presto.sql.tree.QualifiedName;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.isExpression;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -34,21 +40,21 @@ public class WindowFunctionMatcher
         implements RvalueMatcher
 {
     private final ExpectedValueProvider<FunctionCall> callMaker;
-    private final Optional<Signature> signature;
+    private final Optional<FunctionHandle> functionHandle;
     private final Optional<ExpectedValueProvider<WindowNode.Frame>> frameMaker;
 
     /**
      * @param callMaker Always validates the function call
-     * @param signature Optionally validates the signature
+     * @param functionHandle Optionally validates the function handle
      * @param frameMaker Optionally validates the frame
      */
     public WindowFunctionMatcher(
             ExpectedValueProvider<FunctionCall> callMaker,
-            Optional<Signature> signature,
+            Optional<FunctionHandle> functionHandle,
             Optional<ExpectedValueProvider<WindowNode.Frame>> frameMaker)
     {
         this.callMaker = requireNonNull(callMaker, "functionCall is null");
-        this.signature = requireNonNull(signature, "signature is null");
+        this.functionHandle = requireNonNull(functionHandle, "functionHandle is null");
         this.frameMaker = requireNonNull(frameMaker, "frameMaker is null");
     }
 
@@ -66,10 +72,39 @@ public class WindowFunctionMatcher
         Optional<WindowNode.Frame> expectedFrame = frameMaker.map(maker -> maker.getExpectedValue(symbolAliases));
 
         List<Symbol> matchedOutputs = windowNode.getWindowFunctions().entrySet().stream()
-                .filter(assignment ->
-                        expectedCall.equals(assignment.getValue().getFunctionCall())
-                                && signature.map(assignment.getValue().getSignature()::equals).orElse(true)
-                                && expectedFrame.map(assignment.getValue().getFrame()::equals).orElse(true))
+                .filter(assignment -> {
+                    if (!expectedCall.getName().equals(QualifiedName.of(metadata.getFunctionManager().getFunctionMetadata(assignment.getValue().getFunctionCall().getFunctionHandle()).getName()))) {
+                        return false;
+                    }
+                    if (!functionHandle.map(assignment.getValue().getFunctionHandle()::equals).orElse(true)) {
+                        return false;
+                    }
+                    if (!expectedFrame.map(assignment.getValue().getFrame()::equals).orElse(true)) {
+                        return false;
+                    }
+                    List<Expression> expectedExpressions = expectedCall.getArguments();
+                    List<RowExpression> actualExpressions = assignment.getValue().getFunctionCall().getArguments();
+                    if (expectedExpressions.size() != actualExpressions.size()) {
+                        return false;
+                    }
+                    for (int i = 0; i < expectedExpressions.size(); i++) {
+                        Expression expectedExpression = expectedExpressions.get(i);
+                        RowExpression actualExpression = actualExpressions.get(i);
+                        if (!isExpression(actualExpression)) {
+                            SymbolAliases.Builder builder = SymbolAliases.builder();
+                            SymbolsExtractor.extractUnique(expectedExpression).forEach(symbol -> builder.put(symbol.getName(), symbol.toSymbolReference()));
+                            if (!new RowExpressionVerifier(builder.build(), metadata, session).process(expectedExpression, actualExpression)) {
+                                return false;
+                            }
+                        }
+                        else {
+                            if (!expectedExpression.equals(castToExpression(actualExpression))) {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                })
                 .map(Map.Entry::getKey)
                 .collect(toImmutableList());
 
@@ -88,7 +123,7 @@ public class WindowFunctionMatcher
         return toStringHelper(this)
                 .omitNullValues()
                 .add("callMaker", callMaker)
-                .add("signature", signature.orElse(null))
+                .add("functionHandle", functionHandle.orElse(null))
                 .add("frameMaker", frameMaker.orElse(null))
                 .toString();
     }

@@ -37,6 +37,7 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+import java.util.OptionalInt;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
@@ -44,7 +45,6 @@ import java.util.regex.Pattern;
 
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
-import static io.airlift.testing.Assertions.assertInstanceOf;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static java.lang.String.format;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -64,7 +64,7 @@ public class TestMemoryTracking
     private static final DataSize queryMaxSpillSize = new DataSize(1, GIGABYTE);
     private static final SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(maxSpillSize);
 
-    private DefaultQueryContext queryContext;
+    private QueryContext queryContext;
     private TaskContext taskContext;
     private PipelineContext pipelineContext;
     private DriverContext driverContext;
@@ -97,7 +97,7 @@ public class TestMemoryTracking
     public void setUpTest()
     {
         memoryPool = new MemoryPool(new MemoryPoolId("test"), memoryPoolSize);
-        queryContext = new DefaultQueryContext(
+        queryContext = new QueryContext(
                 new QueryId("test_query"),
                 queryMaxMemory,
                 queryMaxTotalMemory,
@@ -111,8 +111,10 @@ public class TestMemoryTracking
                 new TaskStateMachine(new TaskId("query", 0, 0), notificationExecutor),
                 testSessionBuilder().build(),
                 true,
-                true);
-        pipelineContext = taskContext.addPipelineContext(0, true, true);
+                true,
+                OptionalInt.empty(),
+                false);
+        pipelineContext = taskContext.addPipelineContext(0, true, true, false);
         driverContext = pipelineContext.addDriverContext();
         operatorContext = driverContext.addOperatorContext(1, new PlanNodeId("a"), "test-operator");
     }
@@ -121,7 +123,7 @@ public class TestMemoryTracking
     public void testOperatorAllocations()
     {
         MemoryTrackingContext operatorMemoryContext = operatorContext.getOperatorMemoryContext();
-        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext userMemory = operatorContext.localUserMemoryContext();
         LocalMemoryContext revocableMemory = operatorContext.localRevocableMemoryContext();
         userMemory.setBytes(100);
@@ -144,17 +146,17 @@ public class TestMemoryTracking
     @Test
     public void testLocalTotalMemoryLimitExceeded()
     {
-        LocalMemoryContext systemMemoryContext = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemoryContext = operatorContext.newLocalSystemMemoryContext("test");
         systemMemoryContext.setBytes(100);
         assertOperatorMemoryAllocations(operatorContext.getOperatorMemoryContext(), 0, 100, 0);
         systemMemoryContext.setBytes(queryMaxTotalMemory.toBytes());
         assertOperatorMemoryAllocations(operatorContext.getOperatorMemoryContext(), 0, queryMaxTotalMemory.toBytes(), 0);
         try {
             systemMemoryContext.setBytes(queryMaxTotalMemory.toBytes() + 1);
-            fail("allocation should hit the local total memory limit");
+            fail("allocation should hit the per-node total memory limit");
         }
         catch (ExceededMemoryLimitException e) {
-            assertEquals(e.getMessage(), format("Query exceeded local total memory limit of %s", queryMaxTotalMemory));
+            assertEquals(e.getMessage(), format("Query exceeded per-node total memory limit of %1$s [Allocated: %1$s, Delta: 1B, Top Consumers: {test=%1$s}]", queryMaxTotalMemory));
         }
     }
 
@@ -196,7 +198,7 @@ public class TestMemoryTracking
     @Test
     public void testStats()
     {
-        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext userMemory = operatorContext.localUserMemoryContext();
         userMemory.setBytes(100_000_000);
         systemMemory.setBytes(200_000_000);
@@ -256,7 +258,7 @@ public class TestMemoryTracking
     @Test
     public void testRevocableMemoryAllocations()
     {
-        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext systemMemory = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext userMemory = operatorContext.localUserMemoryContext();
         LocalMemoryContext revocableMemory = operatorContext.localRevocableMemoryContext();
         revocableMemory.setBytes(100_000_000);
@@ -328,66 +330,19 @@ public class TestMemoryTracking
     }
 
     @Test
-    public void testTransferMemoryToTaskContext()
+    public void testTrySetZeroBytesFullPool()
     {
-        LocalMemoryContext userMemory = operatorContext.localUserMemoryContext();
-        userMemory.setBytes(300_000_000);
-        assertEquals(operatorContext.getOperatorMemoryContext().getUserMemory(), 300_000_000);
-        assertEquals(driverContext.getDriverMemoryContext().getUserMemory(), 300_000_000);
-        assertEquals(pipelineContext.getPipelineMemoryContext().getUserMemory(), 300_000_000);
-        assertEquals(taskContext.getTaskMemoryContext().getUserMemory(), 300_000_000);
-
-        LocalMemoryContext transferredBytesMemoryContext = taskContext.createNewTransferredBytesMemoryContext();
-        operatorContext.transferMemoryToTaskContext(500_000_000, transferredBytesMemoryContext);
-        assertEquals(operatorContext.getOperatorMemoryContext().getUserMemory(), 0);
-        assertEquals(driverContext.getDriverMemoryContext().getUserMemory(), 0);
-        assertEquals(pipelineContext.getPipelineMemoryContext().getUserMemory(), 0);
-        assertEquals(taskContext.getTaskMemoryContext().getUserMemory(), 500_000_000);
-        assertLocalMemoryAllocations(taskContext.getTaskMemoryContext(), 500_000_000, 500_000_000, 0);
-        transferredBytesMemoryContext.close();
-        assertLocalMemoryAllocations(taskContext.getTaskMemoryContext(), 0, 0, 0);
-
-        // do another set of allocations where transferMemoryToTaskContext() will be called
-        // with exactly the same number of bytes as in the operator user memory context
-        userMemory.setBytes(1000);
-        assertEquals(operatorContext.getOperatorMemoryContext().getUserMemory(), 1000);
-        assertEquals(driverContext.getDriverMemoryContext().getUserMemory(), 1000);
-        assertEquals(pipelineContext.getPipelineMemoryContext().getUserMemory(), 1000);
-        assertEquals(taskContext.getTaskMemoryContext().getUserMemory(), 1000);
-
-        transferredBytesMemoryContext = taskContext.createNewTransferredBytesMemoryContext();
-        operatorContext.transferMemoryToTaskContext(1000, transferredBytesMemoryContext);
-
-        assertEquals(operatorContext.getOperatorMemoryContext().getUserMemory(), 0);
-        assertEquals(driverContext.getDriverMemoryContext().getUserMemory(), 0);
-        assertEquals(pipelineContext.getPipelineMemoryContext().getUserMemory(), 0);
-        assertEquals(taskContext.getTaskMemoryContext().getUserMemory(), 1000);
-        assertLocalMemoryAllocations(taskContext.getTaskMemoryContext(), 1000, 1000, 0);
-        transferredBytesMemoryContext.close();
-        assertLocalMemoryAllocations(taskContext.getTaskMemoryContext(), 0, 0, 0);
-
-        // exhaust the pool
-        userMemory.setBytes(memoryPoolSize.toBytes());
-        assertEquals(operatorContext.getOperatorMemoryContext().getUserMemory(), memoryPoolSize.toBytes());
-        assertEquals(driverContext.getDriverMemoryContext().getUserMemory(), memoryPoolSize.toBytes());
-        assertEquals(pipelineContext.getPipelineMemoryContext().getUserMemory(), memoryPoolSize.toBytes());
-        assertEquals(taskContext.getTaskMemoryContext().getUserMemory(), memoryPoolSize.toBytes());
-
-        transferredBytesMemoryContext = taskContext.createNewTransferredBytesMemoryContext();
-
-        try {
-            operatorContext.transferMemoryToTaskContext(memoryPoolSize.toBytes() + 1000, transferredBytesMemoryContext);
-        }
-        catch (Throwable t) {
-            assertInstanceOf(t, ExceededMemoryLimitException.class);
-            assertEquals(transferredBytesMemoryContext.getBytes(), 0);
-        }
+        LocalMemoryContext localMemoryContext = operatorContext.localUserMemoryContext();
+        // fill up the pool
+        memoryPool.reserve(new QueryId("test_query"), "test", memoryPool.getFreeBytes());
+        // try to reserve 0 bytes in the full pool
+        assertTrue(localMemoryContext.trySetBytes(localMemoryContext.getBytes()));
     }
 
     @Test
     public void testDestroy()
     {
-        LocalMemoryContext newLocalSystemMemoryContext = operatorContext.newLocalSystemMemoryContext();
+        LocalMemoryContext newLocalSystemMemoryContext = operatorContext.newLocalSystemMemoryContext("test");
         LocalMemoryContext newLocalUserMemoryContext = operatorContext.localUserMemoryContext();
         LocalMemoryContext newLocalRevocableMemoryContext = operatorContext.localRevocableMemoryContext();
         newLocalSystemMemoryContext.setBytes(100_000);

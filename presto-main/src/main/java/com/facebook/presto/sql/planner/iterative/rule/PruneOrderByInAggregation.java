@@ -15,14 +15,14 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
-import com.facebook.presto.sql.tree.FunctionCall;
 import com.google.common.collect.ImmutableMap;
 
 import java.util.Map;
+import java.util.Optional;
 
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
@@ -32,11 +32,11 @@ public class PruneOrderByInAggregation
         implements Rule<AggregationNode>
 {
     private static final Pattern<AggregationNode> PATTERN = aggregation();
-    private final FunctionRegistry functionRegistry;
+    private final FunctionManager functionManager;
 
-    public PruneOrderByInAggregation(FunctionRegistry functionRegistry)
+    public PruneOrderByInAggregation(FunctionManager functionManager)
     {
-        this.functionRegistry = requireNonNull(functionRegistry, "functionRegistry is null");
+        this.functionManager = requireNonNull(functionManager, "functionManager is null");
     }
 
     @Override
@@ -56,28 +56,37 @@ public class PruneOrderByInAggregation
         ImmutableMap.Builder<Symbol, Aggregation> aggregations = ImmutableMap.builder();
         for (Map.Entry<Symbol, Aggregation> entry : node.getAggregations().entrySet()) {
             Aggregation aggregation = entry.getValue();
-            if (!aggregation.getCall().getOrderBy().isPresent()) {
+            if (!aggregation.getOrderBy().isPresent()) {
                 aggregations.put(entry);
             }
             // getAggregateFunctionImplementation can be expensive, so check it last.
-            else if (functionRegistry.getAggregateFunctionImplementation(aggregation.getSignature()).isOrderSensitive()) {
+            else if (functionManager.getAggregateFunctionImplementation(aggregation.getFunctionHandle()).isOrderSensitive()) {
                 aggregations.put(entry);
             }
             else {
                 anyRewritten = true;
-                FunctionCall rewritten = new FunctionCall(
-                        aggregation.getCall().getName(),
-                        aggregation.getCall().isDistinct(),
-                        aggregation.getCall().getArguments(),
-                        aggregation.getCall().getFilter());
 
-                aggregations.put(entry.getKey(), new Aggregation(rewritten, aggregation.getSignature(), aggregation.getMask()));
+                aggregations.put(entry.getKey(), new Aggregation(
+                        aggregation.getFunctionHandle(),
+                        aggregation.getArguments(),
+                        aggregation.getFilter(),
+                        Optional.empty(),
+                        aggregation.isDistinct(),
+                        aggregation.getMask()));
             }
         }
 
         if (!anyRewritten) {
             return Result.empty();
         }
-        return Result.ofPlanNode(new AggregationNode(node.getId(), node.getSource(), aggregations.build(), node.getGroupingSets(), node.getStep(), node.getHashSymbol(), node.getGroupIdSymbol()));
+        return Result.ofPlanNode(new AggregationNode(
+                node.getId(),
+                node.getSource(),
+                aggregations.build(),
+                node.getGroupingSets(),
+                node.getPreGroupedSymbols(),
+                node.getStep(),
+                node.getHashSymbol(),
+                node.getGroupIdSymbol()));
     }
 }

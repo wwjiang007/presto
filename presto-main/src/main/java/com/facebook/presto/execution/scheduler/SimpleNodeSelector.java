@@ -15,11 +15,10 @@ package com.facebook.presto.execution.scheduler;
 
 import com.facebook.presto.execution.NodeTaskMap;
 import com.facebook.presto.execution.RemoteTask;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.InternalNodeManager;
 import com.facebook.presto.metadata.Split;
-import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.sql.planner.NodePartitionMap;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.HashMultimap;
@@ -81,20 +80,20 @@ public class SimpleNodeSelector
     }
 
     @Override
-    public List<Node> allNodes()
+    public List<InternalNode> allNodes()
     {
         return ImmutableList.copyOf(nodeMap.get().get().getNodesByHostAndPort().values());
     }
 
     @Override
-    public Node selectCurrentNode()
+    public InternalNode selectCurrentNode()
     {
         // TODO: this is a hack to force scheduling on the coordinator
         return nodeManager.getCurrentNode();
     }
 
     @Override
-    public List<Node> selectRandomNodes(int limit, Set<Node> excludedNodes)
+    public List<InternalNode> selectRandomNodes(int limit, Set<InternalNode> excludedNodes)
     {
         return selectNodes(limit, randomizedNodes(nodeMap.get().get(), includeCoordinator, excludedNodes));
     }
@@ -102,17 +101,17 @@ public class SimpleNodeSelector
     @Override
     public SplitPlacementResult computeAssignments(Set<Split> splits, List<RemoteTask> existingTasks)
     {
-        Multimap<Node, Split> assignment = HashMultimap.create();
+        Multimap<InternalNode, Split> assignment = HashMultimap.create();
         NodeMap nodeMap = this.nodeMap.get().get();
         NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMap, existingTasks);
 
-        ResettableRandomizedIterator<Node> randomCandidates = randomizedNodes(nodeMap, includeCoordinator, ImmutableSet.of());
-        Set<Node> blockedExactNodes = new HashSet<>();
+        ResettableRandomizedIterator<InternalNode> randomCandidates = randomizedNodes(nodeMap, includeCoordinator, ImmutableSet.of());
+        Set<InternalNode> blockedExactNodes = new HashSet<>();
         boolean splitWaitingForAnyNode = false;
         for (Split split : splits) {
             randomCandidates.reset();
 
-            List<Node> candidateNodes;
+            List<InternalNode> candidateNodes;
             if (!split.isRemotelyAccessible()) {
                 candidateNodes = selectExactNodes(nodeMap, split.getAddresses(), includeCoordinator);
             }
@@ -124,10 +123,10 @@ public class SimpleNodeSelector
                 throw new PrestoException(NO_NODES_AVAILABLE, "No nodes available to run query");
             }
 
-            Node chosenNode = null;
+            InternalNode chosenNode = null;
             int min = Integer.MAX_VALUE;
 
-            for (Node node : candidateNodes) {
+            for (InternalNode node : candidateNodes) {
                 int totalSplitCount = assignmentStats.getTotalSplitCount(node);
                 if (totalSplitCount < min && totalSplitCount < maxSplitsPerNode) {
                     chosenNode = node;
@@ -136,7 +135,7 @@ public class SimpleNodeSelector
             }
             if (chosenNode == null) {
                 // min is guaranteed to be MAX_VALUE at this line
-                for (Node node : candidateNodes) {
+                for (InternalNode node : candidateNodes) {
                     int totalSplitCount = assignmentStats.getQueuedSplitCountForStage(node);
                     if (totalSplitCount < min && totalSplitCount < maxPendingSplitsPerTask) {
                         chosenNode = node;
@@ -170,8 +169,8 @@ public class SimpleNodeSelector
     }
 
     @Override
-    public SplitPlacementResult computeAssignments(Set<Split> splits, List<RemoteTask> existingTasks, NodePartitionMap partitioning)
+    public SplitPlacementResult computeAssignments(Set<Split> splits, List<RemoteTask> existingTasks, BucketNodeMap bucketNodeMap)
     {
-        return selectDistributionNodes(nodeMap.get().get(), nodeTaskMap, maxSplitsPerNode, maxPendingSplitsPerTask, splits, existingTasks, partitioning);
+        return selectDistributionNodes(nodeMap.get().get(), nodeTaskMap, maxSplitsPerNode, maxPendingSplitsPerTask, splits, existingTasks, bucketNodeMap);
     }
 }

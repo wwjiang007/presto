@@ -24,6 +24,7 @@ import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -43,7 +44,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Function.identity;
 
@@ -97,10 +97,9 @@ public class AllAtOnceExecutionSchedule
         Set<PlanFragment> rootFragments = fragments.stream()
                 .filter(fragment -> !remoteSources.contains(fragment.getId()))
                 .collect(toImmutableSet());
-        checkArgument(rootFragments.size() == 1, "Expected one root fragment, but found: " + rootFragments);
 
         Visitor visitor = new Visitor(fragments);
-        visitor.processFragment(getOnlyElement(rootFragments).getId());
+        rootFragments.forEach(fragment -> visitor.processFragment(fragment.getId()));
 
         return visitor.getSchedulerOrder();
     }
@@ -144,6 +143,14 @@ public class AllAtOnceExecutionSchedule
         {
             node.getFilteringSource().accept(this, context);
             node.getSource().accept(this, context);
+            return null;
+        }
+
+        @Override
+        public Void visitSpatialJoin(SpatialJoinNode node, Void context)
+        {
+            node.getRight().accept(this, context);
+            node.getLeft().accept(this, context);
             return null;
         }
 

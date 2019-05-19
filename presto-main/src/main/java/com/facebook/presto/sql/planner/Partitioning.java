@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.Session;
+import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.predicate.NullableValue;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -82,15 +84,72 @@ public final class Partitioning
                 .collect(toImmutableSet());
     }
 
-    public boolean isPartitionedWith(Partitioning right,
-            Function<Symbol, Set<Symbol>> leftToRightMappings,
-            Function<Symbol, Optional<NullableValue>> leftConstantMapping,
-            Function<Symbol, Optional<NullableValue>> rightConstantMapping)
+    @Deprecated
+    public boolean isCompatibleWith(
+            Partitioning right,
+            Metadata metadata,
+            Session session)
     {
-        if (!handle.equals(right.handle)) {
+        if (!handle.equals(right.handle) && !metadata.getCommonPartitioning(session, handle, right.handle).isPresent()) {
             return false;
         }
 
+        return arguments.equals(right.arguments);
+    }
+
+    @Deprecated
+    public boolean isCompatibleWith(
+            Partitioning right,
+            Function<Symbol, Set<Symbol>> leftToRightMappings,
+            Function<Symbol, Optional<NullableValue>> leftConstantMapping,
+            Function<Symbol, Optional<NullableValue>> rightConstantMapping,
+            Metadata metadata,
+            Session session)
+    {
+        if (!handle.equals(right.handle) && !metadata.getCommonPartitioning(session, handle, right.handle).isPresent()) {
+            return false;
+        }
+
+        if (arguments.size() != right.arguments.size()) {
+            return false;
+        }
+
+        for (int i = 0; i < arguments.size(); i++) {
+            ArgumentBinding leftArgument = arguments.get(i);
+            ArgumentBinding rightArgument = right.arguments.get(i);
+
+            if (!isPartitionedWith(leftArgument, leftConstantMapping, rightArgument, rightConstantMapping, leftToRightMappings)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    //  Refined-over relation is reflexive.
+    public boolean isRefinedPartitioningOver(
+            Partitioning right,
+            Metadata metadata,
+            Session session)
+    {
+        if (!handle.equals(right.handle) && !metadata.isRefinedPartitioningOver(session, handle, right.handle)) {
+            return false;
+        }
+
+        return arguments.equals(right.arguments);
+    }
+
+    //  Refined-over relation is reflexive.
+    public boolean isRefinedPartitioningOver(
+            Partitioning right,
+            Function<Symbol, Set<Symbol>> leftToRightMappings,
+            Function<Symbol, Optional<NullableValue>> leftConstantMapping,
+            Function<Symbol, Optional<NullableValue>> rightConstantMapping,
+            Metadata metadata,
+            Session session)
+    {
+        if (!metadata.isRefinedPartitioningOver(session, handle, right.handle)) {
+            return false;
+        }
         if (arguments.size() != right.arguments.size()) {
             return false;
         }
@@ -189,6 +248,11 @@ public final class Partitioning
         }
 
         return Optional.of(new Partitioning(handle, newArguments.build()));
+    }
+
+    public Partitioning withAlternativePartitiongingHandle(PartitioningHandle partitiongingHandle)
+    {
+        return new Partitioning(partitiongingHandle, this.arguments);
     }
 
     @Override

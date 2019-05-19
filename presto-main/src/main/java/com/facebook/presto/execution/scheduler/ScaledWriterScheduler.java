@@ -16,7 +16,7 @@ package com.facebook.presto.execution.scheduler;
 import com.facebook.presto.execution.RemoteTask;
 import com.facebook.presto.execution.SqlStageExecution;
 import com.facebook.presto.execution.TaskStatus;
-import com.facebook.presto.spi.Node;
+import com.facebook.presto.metadata.InternalNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.units.DataSize;
@@ -24,10 +24,11 @@ import io.airlift.units.DataSize;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 import static com.facebook.presto.execution.scheduler.ScheduleResult.BlockedReason.WRITER_SCALING;
@@ -39,13 +40,13 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 public class ScaledWriterScheduler
         implements StageScheduler
 {
-    private final BiFunction<Node, Integer, RemoteTask> taskScheduler;
+    private final SqlStageExecution stage;
     private final Supplier<Collection<TaskStatus>> sourceTasksProvider;
     private final Supplier<Collection<TaskStatus>> writerTasksProvider;
     private final NodeSelector nodeSelector;
     private final ScheduledExecutorService executor;
     private final long writerMinSizeBytes;
-    private final Set<Node> scheduledNodes = new HashSet<>();
+    private final Set<InternalNode> scheduledNodes = new HashSet<>();
     private final AtomicBoolean done = new AtomicBoolean();
     private volatile SettableFuture<?> future = SettableFuture.create();
 
@@ -57,8 +58,7 @@ public class ScaledWriterScheduler
             ScheduledExecutorService executor,
             DataSize writerMinSize)
     {
-        requireNonNull(stage, "stage is null");
-        this.taskScheduler = stage::scheduleTask;
+        this.stage = requireNonNull(stage, "stage is null");
         this.sourceTasksProvider = requireNonNull(sourceTasksProvider, "sourceTasksProvider is null");
         this.writerTasksProvider = requireNonNull(writerTasksProvider, "writerTasksProvider is null");
         this.nodeSelector = requireNonNull(nodeSelector, "nodeSelector is null");
@@ -114,14 +114,17 @@ public class ScaledWriterScheduler
             return ImmutableList.of();
         }
 
-        List<Node> nodes = nodeSelector.selectRandomNodes(count, scheduledNodes);
+        List<InternalNode> nodes = nodeSelector.selectRandomNodes(count, scheduledNodes);
 
         checkCondition(!scheduledNodes.isEmpty() || !nodes.isEmpty(), NO_NODES_AVAILABLE, "No nodes available to run query");
 
         ImmutableList.Builder<RemoteTask> tasks = ImmutableList.builder();
-        for (Node node : nodes) {
-            tasks.add(taskScheduler.apply(node, scheduledNodes.size()));
-            scheduledNodes.add(node);
+        for (InternalNode node : nodes) {
+            Optional<RemoteTask> remoteTask = stage.scheduleTask(node, scheduledNodes.size(), OptionalInt.empty());
+            remoteTask.ifPresent(task -> {
+                tasks.add(task);
+                scheduledNodes.add(node);
+            });
         }
 
         return tasks.build();

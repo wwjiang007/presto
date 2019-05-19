@@ -40,7 +40,7 @@ public class IntArrayBlockEncoding
 
         for (int position = 0; position < positionCount; position++) {
             if (!block.isNull(position)) {
-                sliceOutput.writeInt(block.getInt(position, 0));
+                sliceOutput.writeInt(block.getInt(position));
             }
         }
     }
@@ -50,15 +50,15 @@ public class IntArrayBlockEncoding
     {
         int positionCount = sliceInput.readInt();
 
-        boolean[] valueIsNull = decodeNullBits(sliceInput, positionCount);
+        boolean[] valueIsNull = decodeNullBits(sliceInput, positionCount).orElse(null);
 
         int[] values = new int[positionCount];
         for (int position = 0; position < positionCount; position++) {
-            if (!valueIsNull[position]) {
+            if (valueIsNull == null || !valueIsNull[position]) {
                 values[position] = sliceInput.readInt();
             }
         }
 
-        return new IntArrayBlock(positionCount, valueIsNull, values);
+        return new IntArrayBlock(0, positionCount, valueIsNull, values);
     }
 }

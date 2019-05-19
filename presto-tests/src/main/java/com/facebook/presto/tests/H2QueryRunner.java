@@ -81,6 +81,7 @@ import static io.airlift.tpch.TpchTable.LINE_ITEM;
 import static io.airlift.tpch.TpchTable.NATION;
 import static io.airlift.tpch.TpchTable.ORDERS;
 import static io.airlift.tpch.TpchTable.PART;
+import static io.airlift.tpch.TpchTable.PART_SUPPLIER;
 import static io.airlift.tpch.TpchTable.REGION;
 import static java.lang.String.format;
 import static java.util.Collections.nCopies;
@@ -129,6 +130,16 @@ public class H2QueryRunner
                 "  PRIMARY KEY (orderkey, linenumber)" +
                 ")");
         insertRows(tpchMetadata, LINE_ITEM);
+
+        handle.execute(" CREATE TABLE partsupp (\n" +
+                "  partkey BIGINT NOT NULL,\n" +
+                "  suppkey BIGINT NOT NULL,\n" +
+                "  availqty INTEGER NOT NULL,\n" +
+                "  supplycost DOUBLE NOT NULL,\n" +
+                "  comment VARCHAR(199) NOT NULL,\n" +
+                "  PRIMARY KEY(partkey, suppkey)" +
+                ")");
+        insertRows(tpchMetadata, PART_SUPPLIER);
 
         handle.execute("CREATE TABLE nation (\n" +
                 "  nationkey BIGINT PRIMARY KEY,\n" +
@@ -193,7 +204,7 @@ public class H2QueryRunner
                     throws SQLException
             {
                 int count = resultSet.getMetaData().getColumnCount();
-                checkArgument(types.size() == count, "type does not match result");
+                checkArgument(types.size() == count, "expected types count (%s) does not match actual column count (%s)", types.size(), count);
                 List<Object> row = new ArrayList<>(count);
                 for (int i = 1; i <= count; i++) {
                     Type type = types.get(i - 1);

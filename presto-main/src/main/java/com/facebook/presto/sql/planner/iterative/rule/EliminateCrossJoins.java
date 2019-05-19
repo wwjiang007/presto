@@ -14,9 +14,9 @@
 package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.Rule;
@@ -39,8 +39,12 @@ import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.Set;
 
+import static com.facebook.presto.SystemSessionProperties.getJoinReorderingStrategy;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.AUTOMATIC;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
 import static com.facebook.presto.sql.planner.iterative.rule.Util.restrictOutputs;
 import static com.facebook.presto.sql.planner.plan.Patterns.join;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -61,7 +65,9 @@ public class EliminateCrossJoins
     @Override
     public boolean isEnabled(Session session)
     {
-        return SystemSessionProperties.isJoinReorderingEnabled(session);
+        // we run this for cost-based reordering also for cases when some of the tables do not have statistics
+        JoinReorderingStrategy joinReorderingStrategy = getJoinReorderingStrategy(session);
+        return joinReorderingStrategy == ELIMINATE_CROSS_JOINS || joinReorderingStrategy == AUTOMATIC;
     }
 
     @Override
@@ -190,7 +196,7 @@ public class EliminateCrossJoins
             result = new FilterNode(
                     idAllocator.getNextId(),
                     result,
-                    filter);
+                    castToRowExpression(filter));
         }
 
         if (graph.getAssignments().isPresent()) {

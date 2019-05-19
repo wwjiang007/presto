@@ -20,7 +20,6 @@ import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.tree.FunctionCall;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
@@ -34,8 +33,10 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.util.Collections.emptyList;
 
 /**
  * Implements distinct aggregations with similar inputs by transforming plans of the following shape:
@@ -78,16 +79,14 @@ public class SingleDistinctAggregationToGroupBy
     {
         return aggregation.getAggregations()
                 .values().stream()
-                .map(Aggregation::getCall)
-                .allMatch(FunctionCall::isDistinct);
+                .allMatch(Aggregation::isDistinct);
     }
 
     private static boolean noFilters(AggregationNode aggregation)
     {
         return aggregation.getAggregations()
                 .values().stream()
-                .map(Aggregation::getCall)
-                .noneMatch(call -> call.getFilter().isPresent());
+                .noneMatch(instance -> instance.getFilter().isPresent());
     }
 
     private static boolean noMasks(AggregationNode aggregation)
@@ -101,9 +100,8 @@ public class SingleDistinctAggregationToGroupBy
     {
         return aggregation.getAggregations()
                 .values().stream()
-                .map(Aggregation::getCall)
-                .filter(FunctionCall::isDistinct)
-                .map(FunctionCall::getArguments)
+                .filter(Aggregation::isDistinct)
+                .map(Aggregation::getArguments)
                 .<Set<Expression>>map(HashSet::new)
                 .distinct();
     }
@@ -131,10 +129,11 @@ public class SingleDistinctAggregationToGroupBy
                                 context.getIdAllocator().getNextId(),
                                 aggregation.getSource(),
                                 ImmutableMap.of(),
-                                ImmutableList.of(ImmutableList.<Symbol>builder()
+                                singleGroupingSet(ImmutableList.<Symbol>builder()
                                         .addAll(aggregation.getGroupingKeys())
                                         .addAll(symbols)
                                         .build()),
+                                ImmutableList.of(),
                                 SINGLE,
                                 Optional.empty(),
                                 Optional.empty()),
@@ -145,6 +144,7 @@ public class SingleDistinctAggregationToGroupBy
                                         Map.Entry::getKey,
                                         e -> removeDistinct(e.getValue()))),
                         aggregation.getGroupingSets(),
+                        emptyList(),
                         aggregation.getStep(),
                         aggregation.getHashSymbol(),
                         aggregation.getGroupIdSymbol()));
@@ -152,18 +152,14 @@ public class SingleDistinctAggregationToGroupBy
 
     private static AggregationNode.Aggregation removeDistinct(AggregationNode.Aggregation aggregation)
     {
-        checkArgument(aggregation.getCall().isDistinct(), "Expected aggregation to have DISTINCT input");
+        checkArgument(aggregation.isDistinct(), "Expected aggregation to have DISTINCT input");
 
-        FunctionCall call = aggregation.getCall();
         return new AggregationNode.Aggregation(
-                new FunctionCall(
-                        call.getName(),
-                        call.getWindow(),
-                        call.getFilter(),
-                        call.getOrderBy(),
-                        false,
-                        call.getArguments()),
-                aggregation.getSignature(),
+                aggregation.getFunctionHandle(),
+                aggregation.getArguments(),
+                aggregation.getFilter(),
+                aggregation.getOrderBy(),
+                false,
                 aggregation.getMask());
     }
 }

@@ -13,23 +13,31 @@
  */
 package com.facebook.presto.hive.metastore;
 
+import com.facebook.presto.hive.HdfsEnvironment;
+import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
 import com.facebook.presto.hive.PartitionOfflineException;
 import com.facebook.presto.hive.TableOfflineException;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.FileUtils;
 import org.apache.hadoop.hive.metastore.ProtectMode;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
 
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
 import static com.facebook.presto.hive.HiveSplitManager.PRESTO_OFFLINE;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.lang.String.format;
 import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.metastore.MetaStoreUtils.typeToThriftType;
 import static org.apache.hadoop.hive.metastore.ProtectMode.getProtectModeFromString;
@@ -99,7 +107,10 @@ public class MetastoreUtil
         schema.setProperty(META_TABLE_LOCATION, sd.getLocation());
 
         if (sd.getBucketProperty().isPresent()) {
-            schema.setProperty(BUCKET_FIELD_NAME, sd.getBucketProperty().get().getBucketedBy().get(0));
+            List<String> bucketedBy = sd.getBucketProperty().get().getBucketedBy();
+            if (!bucketedBy.isEmpty()) {
+                schema.setProperty(BUCKET_FIELD_NAME, bucketedBy.get(0));
+            }
             schema.setProperty(BUCKET_COUNT, Integer.toString(sd.getBucketProperty().get().getBucketCount()));
         }
         else {
@@ -177,9 +188,19 @@ public class MetastoreUtil
 
     public static String makePartName(List<Column> partitionColumns, List<String> values)
     {
-        checkArgument(partitionColumns.size() == values.size());
+        checkArgument(partitionColumns.size() == values.size(), "Partition value count does not match the partition column count");
+        checkArgument(values.stream().allMatch(Objects::nonNull), "partitionValue must not have null elements");
+
         List<String> partitionColumnNames = partitionColumns.stream().map(Column::getName).collect(toList());
         return FileUtils.makePartName(partitionColumnNames, values);
+    }
+
+    public static String getPartitionLocation(Table table, Optional<Partition> partition)
+    {
+        if (!partition.isPresent()) {
+            return table.getStorage().getLocation();
+        }
+        return partition.get().getStorage().getLocation();
     }
 
     private static String toThriftDdl(String structName, List<Column> columns)
@@ -245,5 +266,32 @@ public class MetastoreUtil
         if (table.getDataColumns().size() <= 1) {
             throw new PrestoException(NOT_SUPPORTED, "Cannot drop the only non-partition column in a table");
         }
+    }
+
+    public static FileSystem getFileSystem(HdfsEnvironment hdfsEnvironment, HdfsContext context, Path path)
+    {
+        try {
+            return hdfsEnvironment.getFileSystem(context, path);
+        }
+        catch (IOException e) {
+            throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Error getting file system. Path: %s", path), e);
+        }
+    }
+
+    public static void renameFile(FileSystem fileSystem, Path source, Path target)
+    {
+        try {
+            if (fileSystem.exists(target) || !fileSystem.rename(source, target)) {
+                throw new PrestoException(HIVE_FILESYSTEM_ERROR, getRenameErrorMessage(source, target));
+            }
+        }
+        catch (IOException e) {
+            throw new PrestoException(HIVE_FILESYSTEM_ERROR, getRenameErrorMessage(source, target), e);
+        }
+    }
+
+    private static String getRenameErrorMessage(Path source, Path target)
+    {
+        return format("Error moving data files from %s to final location %s", source, target);
     }
 }

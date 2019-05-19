@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.sql.planner.optimizations;
 
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.BooleanType;
-import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
@@ -31,9 +31,9 @@ import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.relational.FunctionResolution;
+import com.facebook.presto.sql.relational.OriginalExpressionUtils;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.tree.FunctionCall;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
@@ -43,8 +43,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
@@ -52,17 +52,16 @@ import static java.util.Objects.requireNonNull;
 // TODO: move this class to TransformCorrelatedScalarAggregationToJoin when old optimizer is gone
 public class ScalarAggregationToJoinRewriter
 {
-    private static final QualifiedName COUNT = QualifiedName.of("count");
-
-    private final FunctionRegistry functionRegistry;
+    private final FunctionResolution functionResolution;
     private final SymbolAllocator symbolAllocator;
     private final PlanNodeIdAllocator idAllocator;
     private final Lookup lookup;
     private final PlanNodeDecorrelator planNodeDecorrelator;
 
-    public ScalarAggregationToJoinRewriter(FunctionRegistry functionRegistry, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, Lookup lookup)
+    public ScalarAggregationToJoinRewriter(FunctionManager functionManager, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator, Lookup lookup)
     {
-        this.functionRegistry = requireNonNull(functionRegistry, "metadata is null");
+        requireNonNull(functionManager, "metadata is null");
+        this.functionResolution = new FunctionResolution(functionManager);
         this.symbolAllocator = requireNonNull(symbolAllocator, "symbolAllocator is null");
         this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
         this.lookup = requireNonNull(lookup, "lookup is null");
@@ -117,7 +116,7 @@ public class ScalarAggregationToJoinRewriter
                         .addAll(inputWithUniqueColumns.getOutputSymbols())
                         .addAll(scalarAggregationSource.getOutputSymbols())
                         .build(),
-                joinExpression,
+                joinExpression.map(OriginalExpressionUtils::castToRowExpression),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty());
@@ -161,7 +160,7 @@ public class ScalarAggregationToJoinRewriter
     {
         Set<Symbol> applySymbols = new HashSet<>(lateralJoinNode.getOutputSymbols());
         return aggregationNode.getOutputSymbols().stream()
-                .filter(symbol -> applySymbols.contains(symbol))
+                .filter(applySymbols::contains)
                 .collect(toImmutableList());
     }
 
@@ -172,18 +171,15 @@ public class ScalarAggregationToJoinRewriter
     {
         ImmutableMap.Builder<Symbol, Aggregation> aggregations = ImmutableMap.builder();
         for (Map.Entry<Symbol, Aggregation> entry : scalarAggregation.getAggregations().entrySet()) {
-            FunctionCall call = entry.getValue().getCall();
             Symbol symbol = entry.getKey();
-            if (call.getName().equals(COUNT)) {
-                List<TypeSignature> scalarAggregationSourceTypeSignatures = ImmutableList.of(
-                        symbolAllocator.getTypes().get(nonNullableAggregationSourceSymbol).getTypeSignature());
+            if (functionResolution.isCountFunction(entry.getValue().getFunctionHandle())) {
+                Type scalarAggregationSourceType = symbolAllocator.getTypes().get(nonNullableAggregationSourceSymbol);
                 aggregations.put(symbol, new Aggregation(
-                        new FunctionCall(
-                                COUNT,
-                                ImmutableList.of(nonNullableAggregationSourceSymbol.toSymbolReference())),
-                        functionRegistry.resolveFunction(
-                                COUNT,
-                                fromTypeSignatures(scalarAggregationSourceTypeSignatures)),
+                        functionResolution.countFunction(scalarAggregationSourceType),
+                        ImmutableList.of(nonNullableAggregationSourceSymbol.toSymbolReference()),
+                        Optional.empty(),
+                        Optional.empty(),
+                        false,
                         entry.getValue().getMask()));
             }
             else {
@@ -191,12 +187,12 @@ public class ScalarAggregationToJoinRewriter
             }
         }
 
-        List<Symbol> groupBySymbols = leftOuterJoin.getLeft().getOutputSymbols();
         return Optional.of(new AggregationNode(
                 idAllocator.getNextId(),
                 leftOuterJoin,
                 aggregations.build(),
-                ImmutableList.of(groupBySymbols),
+                singleGroupingSet(leftOuterJoin.getLeft().getOutputSymbols()),
+                ImmutableList.of(),
                 scalarAggregation.getStep(),
                 scalarAggregation.getHashSymbol(),
                 Optional.empty()));

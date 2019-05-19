@@ -63,12 +63,6 @@ public class TopNOperator
         }
 
         @Override
-        public List<Type> getTypes()
-        {
-            return sourceTypes;
-        }
-
-        @Override
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
@@ -96,7 +90,6 @@ public class TopNOperator
 
     private final OperatorContext operatorContext;
     private final LocalMemoryContext localUserMemoryContext;
-    private final List<Type> types;
 
     private GroupedTopNBuilder topNBuilder;
     private boolean finishing;
@@ -112,8 +105,6 @@ public class TopNOperator
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.localUserMemoryContext = operatorContext.localUserMemoryContext();
-        this.types = requireNonNull(types, "types is null");
-
         checkArgument(n >= 0, "n must be positive");
 
         if (n == 0) {
@@ -134,12 +125,6 @@ public class TopNOperator
     public OperatorContext getOperatorContext()
     {
         return operatorContext;
-    }
-
-    @Override
-    public List<Type> getTypes()
-    {
-        return types;
     }
 
     @Override

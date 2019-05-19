@@ -29,7 +29,7 @@ import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static java.lang.Math.toIntExact;
 
-@ScalarFunction("repeat")
+@ScalarFunction(value = "repeat", calledOnNullInput = true)
 @Description("Repeat an element for a given number of times")
 public final class RepeatFunction
 {
@@ -40,7 +40,7 @@ public final class RepeatFunction
 
     @SqlType("array(unknown)")
     public static Block repeat(
-            @SqlNullable @SqlType("unknown") Void element,
+            @SqlNullable @SqlType("unknown") Boolean element,
             @SqlType(StandardTypes.INTEGER) long count)
     {
         checkCondition(element == null, INVALID_FUNCTION_ARGUMENT, "expect null values");

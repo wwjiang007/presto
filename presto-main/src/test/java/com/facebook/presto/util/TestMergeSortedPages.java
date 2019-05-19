@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.util;
 
+import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.PageWithPositionComparator;
 import com.facebook.presto.operator.SimplePageWithPositionComparator;
@@ -354,6 +355,29 @@ public class TestMergeSortedPages
         assertTrue(mergedPages.isFinished());
     }
 
+    @Test
+    public void testMergeSortYieldingProgresses()
+            throws Exception
+    {
+        DriverYieldSignal yieldSignal = new DriverYieldSignal();
+        yieldSignal.forceYieldForTesting();
+        List<Type> types = ImmutableList.of(INTEGER);
+        WorkProcessor<Page> mergedPages = MergeSortedPages.mergeSortedPages(
+                ImmutableList.of(WorkProcessor.fromIterable(rowPagesBuilder(types).build())),
+                new SimplePageWithPositionComparator(types, ImmutableList.of(0), ImmutableList.of(DESC_NULLS_LAST)),
+                ImmutableList.of(0),
+                types,
+                (pageBuilder, pageWithPosition) -> pageBuilder.isFull(),
+                false,
+                newSimpleAggregatedMemoryContext().newAggregatedMemoryContext(),
+                yieldSignal);
+        // yield signal is on
+        assertFalse(mergedPages.process());
+        // processor finishes computations (yield signal is still on, but previous process() call yielded)
+        assertTrue(mergedPages.process());
+        assertTrue(mergedPages.isFinished());
+    }
+
     private static MaterializedResult mergeSortedPages(
             List<Type> types,
             List<Integer> sortChannels,
@@ -366,11 +390,12 @@ public class TestMergeSortedPages
                 .collect(toImmutableList());
         PageWithPositionComparator comparator = new SimplePageWithPositionComparator(types, sortChannels, sortOrder);
 
+        AggregatedMemoryContext memoryContext = newSimpleAggregatedMemoryContext().newAggregatedMemoryContext();
         WorkProcessor<Page> mergedPages = MergeSortedPages.mergeSortedPages(
                 pageProducers,
                 comparator,
                 types,
-                newSimpleAggregatedMemoryContext().newAggregatedMemoryContext(),
+                memoryContext,
                 new DriverYieldSignal());
 
         assertTrue(mergedPages.process());
@@ -382,6 +407,7 @@ public class TestMergeSortedPages
         Page page = mergedPages.getResult();
         assertTrue(mergedPages.process());
         assertTrue(mergedPages.isFinished());
+        assertEquals(memoryContext.getBytes(), 0L);
 
         return toMaterializedResult(TEST_SESSION, types, ImmutableList.of(page));
     }

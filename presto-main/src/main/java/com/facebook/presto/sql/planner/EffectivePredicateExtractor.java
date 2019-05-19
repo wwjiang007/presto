@@ -14,7 +14,9 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.sql.planner.optimizations.JoinNodeUtils;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
@@ -25,17 +27,19 @@ import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.relational.OriginalExpressionUtils;
 import com.facebook.presto.sql.tree.ComparisonExpression;
-import com.facebook.presto.sql.tree.ComparisonExpressionType;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.SymbolReference;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Multimaps;
 import com.google.common.collect.Sets;
 
 import java.util.ArrayList;
@@ -53,6 +57,7 @@ import static com.facebook.presto.sql.ExpressionUtils.expressionOrNullSymbols;
 import static com.facebook.presto.sql.ExpressionUtils.extractConjuncts;
 import static com.facebook.presto.sql.ExpressionUtils.filterDeterministicConjuncts;
 import static com.facebook.presto.sql.planner.EqualityInference.createEqualityInference;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -74,12 +79,12 @@ public class EffectivePredicateExtractor
                 Expression expression = entry.getValue();
                 // TODO: this is not correct with respect to NULLs ('reference IS NULL' would be correct, rather than 'reference = NULL')
                 // TODO: switch this to 'IS NOT DISTINCT FROM' syntax when EqualityInference properly supports it
-                return new ComparisonExpression(ComparisonExpressionType.EQUAL, reference, expression);
+                return new ComparisonExpression(ComparisonExpression.Operator.EQUAL, reference, expression);
             };
 
-    private final DomainTranslator domainTranslator;
+    private final ExpressionDomainTranslator domainTranslator;
 
-    public EffectivePredicateExtractor(DomainTranslator domainTranslator)
+    public EffectivePredicateExtractor(ExpressionDomainTranslator domainTranslator)
     {
         this.domainTranslator = requireNonNull(domainTranslator, "domainTranslator is null");
     }
@@ -92,9 +97,9 @@ public class EffectivePredicateExtractor
     private static class Visitor
             extends PlanVisitor<Expression, Void>
     {
-        private final DomainTranslator domainTranslator;
+        private final ExpressionDomainTranslator domainTranslator;
 
-        public Visitor(DomainTranslator domainTranslator)
+        public Visitor(ExpressionDomainTranslator domainTranslator)
         {
             this.domainTranslator = requireNonNull(domainTranslator, "domainTranslator is null");
         }
@@ -127,7 +132,7 @@ public class EffectivePredicateExtractor
         {
             Expression underlyingPredicate = node.getSource().accept(this, context);
 
-            Expression predicate = node.getPredicate();
+            Expression predicate = castToExpression(node.getPredicate());
 
             // Remove non-deterministic conjuncts
             predicate = filterDeterministicConjuncts(predicate);
@@ -182,6 +187,12 @@ public class EffectivePredicateExtractor
         }
 
         @Override
+        public Expression visitAssignUniqueId(AssignUniqueId node, Void context)
+        {
+            return node.getSource().accept(this, context);
+        }
+
+        @Override
         public Expression visitDistinctLimit(DistinctLimitNode node, Void context)
         {
             return node.getSource().accept(this, context);
@@ -209,7 +220,7 @@ public class EffectivePredicateExtractor
         @Override
         public Expression visitUnion(UnionNode node, Void context)
         {
-            return deriveCommonPredicates(node, source -> node.outputSymbolMap(source).entries());
+            return deriveCommonPredicates(node, source -> Multimaps.transformValues(node.outputSymbolMap(source), Symbol::toSymbolReference).entries());
         }
 
         @Override
@@ -219,16 +230,17 @@ public class EffectivePredicateExtractor
             Expression rightPredicate = node.getRight().accept(this, context);
 
             List<Expression> joinConjuncts = node.getCriteria().stream()
-                    .map(JoinNode.EquiJoinClause::toExpression)
+                    .map(JoinNodeUtils::toExpression)
                     .collect(toImmutableList());
 
             switch (node.getType()) {
                 case INNER:
-                    return combineConjuncts(ImmutableList.<Expression>builder()
-                            .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
-                            .add(pullExpressionThroughSymbols(rightPredicate, node.getOutputSymbols()))
-                            .addAll(pullExpressionsThroughSymbols(joinConjuncts, node.getOutputSymbols()))
-                            .build());
+                    return pullExpressionThroughSymbols(combineConjuncts(ImmutableList.<Expression>builder()
+                            .add(leftPredicate)
+                            .add(rightPredicate)
+                            .add(combineConjuncts(joinConjuncts))
+                            .add(node.getFilter().map(OriginalExpressionUtils::castToExpression).orElse(TRUE_LITERAL))
+                            .build()), node.getOutputSymbols());
                 case LEFT:
                     return combineConjuncts(ImmutableList.<Expression>builder()
                             .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
@@ -267,6 +279,28 @@ public class EffectivePredicateExtractor
         {
             // Filtering source does not change the effective predicate over the output symbols
             return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Expression visitSpatialJoin(SpatialJoinNode node, Void context)
+        {
+            Expression leftPredicate = node.getLeft().accept(this, context);
+            Expression rightPredicate = node.getRight().accept(this, context);
+
+            switch (node.getType()) {
+                case INNER:
+                    return combineConjuncts(ImmutableList.<Expression>builder()
+                            .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
+                            .add(pullExpressionThroughSymbols(rightPredicate, node.getOutputSymbols()))
+                            .build());
+                case LEFT:
+                    return combineConjuncts(ImmutableList.<Expression>builder()
+                            .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
+                            .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(rightPredicate), node.getOutputSymbols(), node.getRight().getOutputSymbols()::contains))
+                            .build());
+                default:
+                    throw new IllegalArgumentException("Unsupported spatial join type: " + node.getType());
+            }
         }
 
         private Expression deriveCommonPredicates(PlanNode node, Function<Integer, Collection<Map.Entry<Symbol, SymbolReference>>> mapping)
@@ -313,7 +347,7 @@ public class EffectivePredicateExtractor
 
             ImmutableList.Builder<Expression> effectiveConjuncts = ImmutableList.builder();
             for (Expression conjunct : EqualityInference.nonInferrableConjuncts(expression)) {
-                if (DeterminismEvaluator.isDeterministic(conjunct)) {
+                if (ExpressionDeterminismEvaluator.isDeterministic(conjunct)) {
                     Expression rewritten = equalityInference.rewriteExpression(conjunct, in(symbols));
                     if (rewritten != null) {
                         effectiveConjuncts.add(rewritten);

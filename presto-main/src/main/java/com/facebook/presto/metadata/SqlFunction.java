@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.metadata;
 
+import com.facebook.presto.spi.function.Signature;
+
 public interface SqlFunction
 {
     Signature getSignature();
@@ -20,6 +22,11 @@ public interface SqlFunction
     boolean isHidden();
 
     boolean isDeterministic();
+
+    default boolean isCalledOnNullInput()
+    {
+        return false;
+    };
 
     String getDescription();
 }

@@ -24,6 +24,10 @@ import javax.validation.constraints.NotNull;
 import java.io.File;
 import java.util.Map;
 
+import static com.facebook.presto.orc.metadata.CompressionKind.SNAPPY;
+import static com.facebook.presto.orc.metadata.CompressionKind.ZSTD;
+import static com.facebook.presto.raptor.storage.StorageManagerConfig.OrcOptimizedWriterStage.DISABLED;
+import static com.facebook.presto.raptor.storage.StorageManagerConfig.OrcOptimizedWriterStage.ENABLED_AND_VALIDATED;
 import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
@@ -50,7 +54,10 @@ public class TestStorageManagerConfig
                 .setOrcMaxMergeDistance(new DataSize(1, MEGABYTE))
                 .setOrcMaxReadSize(new DataSize(8, MEGABYTE))
                 .setOrcStreamBufferSize(new DataSize(8, MEGABYTE))
+                .setOrcTinyStripeThreshold(new DataSize(8, MEGABYTE))
                 .setOrcLazyReadSmallRanges(true)
+                .setOrcOptimizedWriterStage(DISABLED)
+                .setOrcCompressionKind(SNAPPY)
                 .setDeletionThreads(max(1, getRuntime().availableProcessors() / 2))
                 .setShardRecoveryTimeout(new Duration(30, SECONDS))
                 .setMissingShardDiscoveryInterval(new Duration(5, MINUTES))
@@ -61,6 +68,7 @@ public class TestStorageManagerConfig
                 .setCompactionEnabled(true)
                 .setOrganizationEnabled(true)
                 .setOrganizationInterval(new Duration(7, DAYS))
+                .setOrganizationDiscoveryInterval(new Duration(6, HOURS))
                 .setMaxShardRows(1_000_000)
                 .setMaxShardSize(new DataSize(256, MEGABYTE))
                 .setMaxBufferSize(new DataSize(256, MEGABYTE))
@@ -77,7 +85,10 @@ public class TestStorageManagerConfig
                 .put("storage.orc.max-merge-distance", "16kB")
                 .put("storage.orc.max-read-size", "16kB")
                 .put("storage.orc.stream-buffer-size", "16kB")
+                .put("storage.orc.tiny-stripe-threshold", "15kB")
                 .put("storage.orc.lazy-read-small-ranges", "false")
+                .put("storage.orc.optimized-writer-stage", "ENABLED_AND_VALIDATED")
+                .put("storage.orc.compression-kind", "ZSTD")
                 .put("storage.max-deletion-threads", "999")
                 .put("storage.shard-recovery-timeout", "1m")
                 .put("storage.missing-shard-discovery-interval", "4m")
@@ -85,6 +96,7 @@ public class TestStorageManagerConfig
                 .put("storage.compaction-interval", "4h")
                 .put("storage.organization-enabled", "false")
                 .put("storage.organization-interval", "4h")
+                .put("storage.organization-discovery-interval", "2h")
                 .put("storage.ejector-interval", "9h")
                 .put("storage.max-recovery-threads", "12")
                 .put("storage.max-organization-threads", "12")
@@ -101,7 +113,10 @@ public class TestStorageManagerConfig
                 .setOrcMaxMergeDistance(new DataSize(16, KILOBYTE))
                 .setOrcMaxReadSize(new DataSize(16, KILOBYTE))
                 .setOrcStreamBufferSize(new DataSize(16, KILOBYTE))
+                .setOrcTinyStripeThreshold(new DataSize(15, KILOBYTE))
                 .setOrcLazyReadSmallRanges(false)
+                .setOrcOptimizedWriterStage(ENABLED_AND_VALIDATED)
+                .setOrcCompressionKind(ZSTD)
                 .setDeletionThreads(999)
                 .setShardRecoveryTimeout(new Duration(1, MINUTES))
                 .setMissingShardDiscoveryInterval(new Duration(4, MINUTES))
@@ -109,6 +124,7 @@ public class TestStorageManagerConfig
                 .setCompactionInterval(new Duration(4, HOURS))
                 .setOrganizationEnabled(false)
                 .setOrganizationInterval(new Duration(4, HOURS))
+                .setOrganizationDiscoveryInterval(new Duration(2, HOURS))
                 .setShardEjectorInterval(new Duration(9, HOURS))
                 .setRecoveryThreads(12)
                 .setOrganizationThreads(12)

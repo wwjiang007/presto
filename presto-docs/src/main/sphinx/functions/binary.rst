@@ -22,6 +22,21 @@ Binary Functions
     This function provides the same functionality as the
     SQL-standard concatenation operator (``||``).
 
+.. function:: substr(binary, start) -> varbinary
+    :noindex:
+
+    Returns the rest of ``binary`` from the starting position ``start``,
+    measured in bytes. Positions start with ``1``. A negative starting position
+    is interpreted as being relative to the end of the string.
+
+.. function:: substr(binary, start, length) -> varbinary
+    :noindex:
+
+    Returns a substring from ``binary`` of length ``length`` from the starting
+    position ``start``, measured in bytes. Positions start with ``1``. A
+    negative starting position is interpreted as being relative to the end of
+    the string.
+
 .. function:: to_base64(binary) -> varchar
 
     Encodes ``binary`` into a base64 string representation.
@@ -54,6 +69,14 @@ Binary Functions
 
     Decodes ``bigint`` value from a 64-bit 2's complement big endian ``binary``.
 
+.. function:: to_big_endian_32(integer) -> varbinary
+
+    Encodes ``integer`` in a 32-bit 2's complement big endian format.
+
+.. function:: from_big_endian_32(binary) -> integer
+
+    Decodes ``integer`` value from a 32-bit 2's complement big endian ``binary``.
+
 .. function:: to_ieee754_32(real) -> varbinary
 
     Encodes ``real`` in a 32-bit big-endian binary according to IEEE 754 single-precision floating-point format.
@@ -69,6 +92,22 @@ Binary Functions
 .. function:: from_ieee754_64(binary) -> double
 
     Decodes the 64-bit big-endian ``binary`` in IEEE 754 double-precision floating-point format.
+
+.. function:: lpad(binary, size, padbinary) -> varbinary
+    :noindex:
+
+    Left pads ``binary`` to ``size`` bytes with ``padbinary``.
+    If ``size`` is less than the length of ``binary``, the result is
+    truncated to ``size`` characters. ``size`` must not be negative
+    and ``padbinary`` must be non-empty.
+
+.. function:: rpad(binary, size, padbinary) -> varbinary
+    :noindex:
+
+    Right pads ``binary`` to ``size`` bytes with ``padbinary``.
+    If ``size`` is less than the length of ``binary``, the result is
+    truncated to ``size`` characters. ``size`` must not be negative
+    and ``padbinary`` must be non-empty.
 
 .. function:: crc32(binary) -> bigint
 
@@ -94,6 +133,14 @@ Binary Functions
 .. function:: xxhash64(binary) -> varbinary
 
     Computes the xxhash64 hash of ``binary``.
+
+.. function:: spooky_hash_v2_32(binary) -> varbinary
+
+    Computes the 32-bit SpookyHashV2 hash of ``binary``.
+
+.. function:: spooky_hash_v2_64(binary) -> varbinary
+
+    Computes the 64-bit SpookyHashV2 hash of ``binary``.
 
 .. function:: hmac_md5(binary, key) -> varbinary
 

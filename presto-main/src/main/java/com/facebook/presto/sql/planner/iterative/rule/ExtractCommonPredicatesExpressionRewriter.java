@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.sql.planner.DeterminismEvaluator;
+import com.facebook.presto.sql.planner.ExpressionDeterminismEvaluator;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionRewriter;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
@@ -28,7 +28,7 @@ import java.util.Set;
 
 import static com.facebook.presto.sql.ExpressionUtils.combinePredicates;
 import static com.facebook.presto.sql.ExpressionUtils.extractPredicates;
-import static com.facebook.presto.sql.tree.LogicalBinaryExpression.Type.OR;
+import static com.facebook.presto.sql.tree.LogicalBinaryExpression.Operator.OR;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Collections.emptySet;
 import static java.util.stream.Collectors.toList;
@@ -60,8 +60,8 @@ public class ExtractCommonPredicatesExpressionRewriter
         public Expression rewriteLogicalBinaryExpression(LogicalBinaryExpression node, NodeContext context, ExpressionTreeRewriter<NodeContext> treeRewriter)
         {
             Expression expression = combinePredicates(
-                    node.getType(),
-                    extractPredicates(node.getType(), node).stream()
+                    node.getOperator(),
+                    extractPredicates(node.getOperator(), node).stream()
                             .map(subExpression -> treeRewriter.rewrite(subExpression, NodeContext.NOT_ROOT_NODE))
                             .collect(toImmutableList()));
 
@@ -72,7 +72,7 @@ public class ExtractCommonPredicatesExpressionRewriter
             Expression simplified = extractCommonPredicates((LogicalBinaryExpression) expression);
 
             // Prefer AND LogicalBinaryExpression at the root if possible
-            if (context.isRootNode() && simplified instanceof LogicalBinaryExpression && ((LogicalBinaryExpression) simplified).getType() == OR) {
+            if (context.isRootNode() && simplified instanceof LogicalBinaryExpression && ((LogicalBinaryExpression) simplified).getOperator() == OR) {
                 return distributeIfPossible((LogicalBinaryExpression) simplified);
             }
 
@@ -92,14 +92,14 @@ public class ExtractCommonPredicatesExpressionRewriter
                     .map(predicateList -> removeAll(predicateList, commonPredicates))
                     .collect(toImmutableList());
 
-            LogicalBinaryExpression.Type flippedNodeType = node.getType().flip();
+            LogicalBinaryExpression.Operator flippedOperator = node.getOperator().flip();
 
             List<Expression> uncorrelatedPredicates = uncorrelatedSubPredicates.stream()
-                    .map(predicate -> combinePredicates(flippedNodeType, predicate))
+                    .map(predicate -> combinePredicates(flippedOperator, predicate))
                     .collect(toImmutableList());
-            Expression combinedUncorrelatedPredicates = combinePredicates(node.getType(), uncorrelatedPredicates);
+            Expression combinedUncorrelatedPredicates = combinePredicates(node.getOperator(), uncorrelatedPredicates);
 
-            return combinePredicates(flippedNodeType, ImmutableList.<Expression>builder()
+            return combinePredicates(flippedOperator, ImmutableList.<Expression>builder()
                     .addAll(commonPredicates)
                     .add(combinedUncorrelatedPredicates)
                     .build());
@@ -107,7 +107,7 @@ public class ExtractCommonPredicatesExpressionRewriter
 
         private static List<List<Expression>> getSubPredicates(LogicalBinaryExpression expression)
         {
-            return extractPredicates(expression.getType(), expression).stream()
+            return extractPredicates(expression.getOperator(), expression).stream()
                     .map(predicate -> predicate instanceof LogicalBinaryExpression ?
                             extractPredicates((LogicalBinaryExpression) predicate) : ImmutableList.of(predicate))
                     .collect(toImmutableList());
@@ -124,7 +124,7 @@ public class ExtractCommonPredicatesExpressionRewriter
          */
         private static Expression distributeIfPossible(LogicalBinaryExpression expression)
         {
-            if (!DeterminismEvaluator.isDeterministic(expression)) {
+            if (!ExpressionDeterminismEvaluator.isDeterministic(expression)) {
                 // Do not distribute boolean expressions if there are any non-deterministic elements
                 // TODO: This can be optimized further if non-deterministic elements are not repeated
                 return expression;
@@ -159,16 +159,16 @@ public class ExtractCommonPredicatesExpressionRewriter
             Set<List<Expression>> crossProduct = Sets.cartesianProduct(subPredicates);
 
             return combinePredicates(
-                    expression.getType().flip(),
+                    expression.getOperator().flip(),
                     crossProduct.stream()
-                            .map(expressions -> combinePredicates(expression.getType(), expressions))
+                            .map(expressions -> combinePredicates(expression.getOperator(), expressions))
                             .collect(toImmutableList()));
         }
 
         private static Set<Expression> filterDeterministicPredicates(List<Expression> predicates)
         {
             return predicates.stream()
-                    .filter(DeterminismEvaluator::isDeterministic)
+                    .filter(ExpressionDeterminismEvaluator::isDeterministic)
                     .collect(toSet());
         }
 

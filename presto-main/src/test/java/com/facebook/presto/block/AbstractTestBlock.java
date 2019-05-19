@@ -13,7 +13,8 @@
  */
 package com.facebook.presto.block;
 
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.spi.block.AbstractMapBlock.HashTables;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
@@ -33,6 +34,8 @@ import org.testng.annotations.Test;
 import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Array;
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -47,8 +50,11 @@ import static io.airlift.slice.SizeOf.SIZE_OF_SHORT;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
+import static java.util.Arrays.fill;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotSame;
+import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 
@@ -57,13 +63,17 @@ public abstract class AbstractTestBlock
 {
     private static final TypeManager TYPE_MANAGER = new TypeRegistry();
     private static final BlockEncodingSerde BLOCK_ENCODING_SERDE = new BlockEncodingManager(TYPE_MANAGER);
+
     static {
-        // associate TYPE_MANAGER with a function registry
-        new FunctionRegistry(TYPE_MANAGER, new BlockEncodingManager(TYPE_MANAGER), new FeaturesConfig());
+        // associate TYPE_MANAGER with a function manager
+        new FunctionManager(TYPE_MANAGER, new BlockEncodingManager(TYPE_MANAGER), new FeaturesConfig());
     }
 
     protected <T> void assertBlock(Block block, Supplier<BlockBuilder> newBlockBuilder, T[] expectedValues)
     {
+        assertBlockSize(block);
+        assertRetainedSize(block);
+
         assertBlockPositions(block, newBlockBuilder, expectedValues);
         assertBlockPositions(copyBlockViaBlockSerde(block), newBlockBuilder, expectedValues);
         assertBlockPositions(copyBlockViaWritePositionTo(block, newBlockBuilder), newBlockBuilder, expectedValues);
@@ -96,6 +106,9 @@ public abstract class AbstractTestBlock
         Field[] fields = block.getClass().getDeclaredFields();
         try {
             for (Field field : fields) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
                 Class<?> type = field.getType();
                 if (type.isPrimitive()) {
                     continue;
@@ -104,7 +117,10 @@ public abstract class AbstractTestBlock
                 field.setAccessible(true);
 
                 if (type == Slice.class) {
-                    retainedSize += ((Slice) field.get(block)).getRetainedSize();
+                    Slice slice = (Slice) field.get(block);
+                    if (slice != null) {
+                        retainedSize += slice.getRetainedSize();
+                    }
                 }
                 else if (type == BlockBuilderStatus.class) {
                     if (field.get(block) != null) {
@@ -141,6 +157,9 @@ public abstract class AbstractTestBlock
                 }
                 else if (type == DictionaryId.class) {
                     retainedSize += ClassLayout.parseClass(DictionaryId.class).instanceSize();
+                }
+                else if (type == HashTables.class) {
+                    retainedSize += ((HashTables) field.get(block)).getRetainedSizeInBytes();
                 }
                 else if (type == MethodHandle.class) {
                     // MethodHandles are only used in MapBlock/MapBlockBuilder,
@@ -214,6 +233,14 @@ public abstract class AbstractTestBlock
         long expectedSecondHalfSize = copyBlockViaBlockSerde(secondHalf).getSizeInBytes();
         assertEquals(secondHalf.getSizeInBytes(), expectedSecondHalfSize);
         assertEquals(block.getRegionSizeInBytes(firstHalf.getPositionCount(), secondHalf.getPositionCount()), expectedSecondHalfSize);
+
+        boolean[] positions = new boolean[block.getPositionCount()];
+        fill(positions, 0, firstHalf.getPositionCount(), true);
+        assertEquals(block.getPositionsSizeInBytes(positions), expectedFirstHalfSize);
+        fill(positions, true);
+        assertEquals(block.getPositionsSizeInBytes(positions), expectedBlockSize);
+        fill(positions, 0, firstHalf.getPositionCount(), false);
+        assertEquals(block.getPositionsSizeInBytes(positions), expectedSecondHalfSize);
     }
 
     // expectedValueType is required since otherwise the expected value type is unknown when expectedValue is null.
@@ -259,26 +286,24 @@ public abstract class AbstractTestBlock
         if (expectedValue instanceof Slice) {
             Slice expectedSliceValue = (Slice) expectedValue;
 
-            if (isByteAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_BYTE; offset++) {
-                    assertEquals(block.getByte(position, offset), expectedSliceValue.getByte(offset));
-                }
+            if (isByteAccessSupported() && expectedSliceValue.length() >= SIZE_OF_BYTE) {
+                assertEquals(block.getByte(position), expectedSliceValue.getByte(0));
             }
 
-            if (isShortAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_SHORT; offset++) {
-                    assertEquals(block.getShort(position, offset), expectedSliceValue.getShort(offset));
-                }
+            if (isShortAccessSupported() && expectedSliceValue.length() >= SIZE_OF_SHORT) {
+                assertEquals(block.getShort(position), expectedSliceValue.getShort(0));
             }
 
-            if (isIntAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_INT; offset++) {
-                    assertEquals(block.getInt(position, offset), expectedSliceValue.getInt(offset));
-                }
+            if (isIntAccessSupported() && expectedSliceValue.length() >= SIZE_OF_INT) {
+                assertEquals(block.getInt(position), expectedSliceValue.getInt(0));
             }
 
-            if (isLongAccessSupported()) {
-                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_LONG; offset++) {
+            if (isIntAccessSupported() && expectedSliceValue.length() >= SIZE_OF_LONG) {
+                assertEquals(block.getLong(position), expectedSliceValue.getLong(0));
+            }
+
+            if (isAlignedLongAccessSupported()) {
+                for (int offset = 0; offset <= expectedSliceValue.length() - SIZE_OF_LONG; offset += SIZE_OF_LONG) {
                     assertEquals(block.getLong(position, offset), expectedSliceValue.getLong(offset));
                 }
             }
@@ -366,6 +391,11 @@ public abstract class AbstractTestBlock
         return true;
     }
 
+    protected boolean isAlignedLongAccessSupported()
+    {
+        return false;
+    }
+
     protected boolean isSliceAccessSupported()
     {
         return true;
@@ -439,9 +469,9 @@ public abstract class AbstractTestBlock
         return dynamicSliceOutput.slice();
     }
 
-    protected static Object[] alternatingNullValues(Object[] objects)
+    protected static <T> T[] alternatingNullValues(T[] objects)
     {
-        Object[] objectsWithNulls = (Object[]) Array.newInstance(objects.getClass().getComponentType(), objects.length * 2 + 1);
+        T[] objectsWithNulls = Arrays.copyOf(objects, objects.length * 2 + 1);
         for (int i = 0; i < objects.length; i++) {
             objectsWithNulls[i * 2] = null;
             objectsWithNulls[i * 2 + 1] = objects[i];
@@ -457,5 +487,51 @@ public abstract class AbstractTestBlock
             expectedValues[position] = Slices.copyOf(createExpectedValue(position));
         }
         return expectedValues;
+    }
+
+    protected static void assertEstimatedDataSizeForStats(BlockBuilder blockBuilder, Slice[] expectedSliceValues)
+    {
+        Block block = blockBuilder.build();
+        assertEquals(block.getPositionCount(), expectedSliceValues.length);
+        for (int i = 0; i < block.getPositionCount(); i++) {
+            int expectedSize = expectedSliceValues[i] == null ? 0 : expectedSliceValues[i].length();
+            assertEquals(blockBuilder.getEstimatedDataSizeForStats(i), expectedSize);
+            assertEquals(block.getEstimatedDataSizeForStats(i), expectedSize);
+        }
+
+        BlockBuilder nullValueBlockBuilder = blockBuilder.newBlockBuilderLike(null).appendNull();
+        assertEquals(nullValueBlockBuilder.getEstimatedDataSizeForStats(0), 0);
+        assertEquals(nullValueBlockBuilder.build().getEstimatedDataSizeForStats(0), 0);
+    }
+
+    protected static void testCopyRegionCompactness(Block block)
+    {
+        assertCompact(block.copyRegion(0, block.getPositionCount()));
+        if (block.getPositionCount() > 0) {
+            assertCompact(block.copyRegion(0, block.getPositionCount() - 1));
+            assertCompact(block.copyRegion(1, block.getPositionCount() - 1));
+        }
+    }
+
+    protected static void assertCompact(Block block)
+    {
+        assertSame(block.copyRegion(0, block.getPositionCount()), block);
+    }
+
+    protected static void assertNotCompact(Block block)
+    {
+        assertNotSame(block.copyRegion(0, block.getPositionCount()), block);
+    }
+
+    protected static void testCompactBlock(Block block)
+    {
+        assertCompact(block);
+        testCopyRegionCompactness(block);
+    }
+
+    protected static void testIncompactBlock(Block block)
+    {
+        assertNotCompact(block);
+        testCopyRegionCompactness(block);
     }
 }

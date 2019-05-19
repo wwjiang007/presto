@@ -33,6 +33,7 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
@@ -88,6 +89,7 @@ public class TestThriftIndexPageSource
         long pageSizeReceived = 0;
         ThriftIndexPageSource pageSource = new ThriftIndexPageSource(
                 (context, headers) -> client,
+                ImmutableMap.of(),
                 stats,
                 new ThriftIndexHandle(new SchemaTableName("default", "table1"), TupleDomain.all()),
                 ImmutableList.of(column("a", INTEGER)),
@@ -117,7 +119,7 @@ public class TestThriftIndexPageSource
         assertEquals((long) stats.getIndexPageSize().getAllTime().getTotal(), pageSizeReceived);
         assertNotNull(page);
         assertEquals(page.getPositionCount(), 1);
-        assertEquals(page.getBlock(0).getInt(0, 0), 20);
+        assertEquals(page.getBlock(0).getInt(0), 20);
         // not complete yet
         assertFalse(pageSource.isFinished());
 
@@ -132,7 +134,7 @@ public class TestThriftIndexPageSource
         pageSizeReceived += page.getSizeInBytes();
         assertEquals((long) stats.getIndexPageSize().getAllTime().getTotal(), pageSizeReceived);
         assertEquals(page.getPositionCount(), 1);
-        assertEquals(page.getBlock(0).getInt(0, 0), 10);
+        assertEquals(page.getBlock(0).getInt(0), 10);
         // still not complete
         assertFalse(pageSource.isFinished());
 
@@ -143,7 +145,7 @@ public class TestThriftIndexPageSource
         pageSizeReceived += page.getSizeInBytes();
         assertEquals((long) stats.getIndexPageSize().getAllTime().getTotal(), pageSizeReceived);
         assertEquals(page.getPositionCount(), 1);
-        assertEquals(page.getBlock(0).getInt(0, 0), 30);
+        assertEquals(page.getBlock(0).getInt(0), 30);
         // finished now
         assertTrue(pageSource.isFinished());
 
@@ -186,6 +188,7 @@ public class TestThriftIndexPageSource
         TestingThriftService client = new TestingThriftService(rowsPerSplit, true, twoSplitBatches);
         ThriftIndexPageSource pageSource = new ThriftIndexPageSource(
                 (context, headers) -> client,
+                ImmutableMap.of(),
                 new ThriftConnectorStats(),
                 new ThriftIndexHandle(new SchemaTableName("default", "table1"), TupleDomain.all()),
                 ImmutableList.of(column("a", INTEGER)),
@@ -202,7 +205,7 @@ public class TestThriftIndexPageSource
             if (page != null) {
                 Block block = page.getBlock(0);
                 for (int position = 0; position < block.getPositionCount(); position++) {
-                    actual.add(block.getInt(position, 0));
+                    actual.add(block.getInt(position));
                 }
             }
         }

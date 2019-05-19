@@ -25,7 +25,6 @@ import com.facebook.presto.spiller.SpillerFactory;
 import com.facebook.presto.spiller.SpillerStats;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.MoreExecutors;
 import io.airlift.tpch.LineItem;
 import io.airlift.tpch.LineItemGenerator;
@@ -62,7 +61,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 public class BenchmarkBinaryFileSpiller
 {
     private static final List<Type> TYPES = ImmutableList.of(BIGINT, BIGINT, DOUBLE, createUnboundedVarcharType(), DOUBLE);
-    private static final BlockEncodingSerde BLOCK_ENCODING_MANAGER = new BlockEncodingManager(new TypeRegistry(ImmutableSet.of(BIGINT, DOUBLE, VARCHAR)));
+    private static final BlockEncodingSerde BLOCK_ENCODING_MANAGER = new BlockEncodingManager(new TypeRegistry());
     private static final Path SPILL_PATH = Paths.get(System.getProperty("java.io.tmpdir"), "spills");
 
     @Benchmark
@@ -90,27 +89,38 @@ public class BenchmarkBinaryFileSpiller
     public static class BenchmarkData
     {
         private final SpillerStats spillerStats = new SpillerStats();
-        private final FileSingleStreamSpillerFactory singleStreamSpillerFactory = new FileSingleStreamSpillerFactory(
-                MoreExecutors.newDirectExecutorService(),
-                BLOCK_ENCODING_MANAGER,
-                spillerStats,
-                ImmutableList.of(SPILL_PATH),
-                1.0);
-        private final SpillerFactory spillerFactory = new GenericSpillerFactory(singleStreamSpillerFactory);
 
-        @Param({"10000"})
+        @Param("10000")
         private int rowsPerPage = 10000;
 
-        @Param({"10"})
+        @Param("10")
         private int pagesCount = 10;
+
+        @Param("false")
+        private boolean compressionEnabled;
+
+        @Param("false")
+        private boolean encryptionEnabled;
 
         private List<Page> pages;
         private Spiller readSpiller;
+
+        private FileSingleStreamSpillerFactory singleStreamSpillerFactory;
+        private SpillerFactory spillerFactory;
 
         @Setup
         public void setup()
                 throws ExecutionException, InterruptedException
         {
+            singleStreamSpillerFactory = new FileSingleStreamSpillerFactory(
+                    MoreExecutors.newDirectExecutorService(),
+                    BLOCK_ENCODING_MANAGER,
+                    spillerStats,
+                    ImmutableList.of(SPILL_PATH),
+                    1.0,
+                    compressionEnabled,
+                    encryptionEnabled);
+            spillerFactory = new GenericSpillerFactory(singleStreamSpillerFactory);
             pages = createInputPages();
             readSpiller = spillerFactory.create(TYPES, bytes -> {}, newSimpleAggregatedMemoryContext());
             readSpiller.spill(pages.iterator()).get();

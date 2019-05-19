@@ -14,20 +14,30 @@
 
 package com.facebook.presto.block;
 
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.block.ByteArrayBlock;
+import com.facebook.presto.spi.block.MapBlock;
+import com.facebook.presto.spi.block.MapBlockBuilder;
 import com.facebook.presto.spi.block.SingleMapBlock;
 import com.facebook.presto.spi.type.MapType;
+import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.sql.analyzer.FeaturesConfig;
+import com.facebook.presto.type.TypeRegistry;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static com.facebook.presto.block.BlockAssertions.createLongsBlock;
 import static com.facebook.presto.block.BlockAssertions.createStringsBlock;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.util.StructuralTestUtil.mapType;
 import static io.airlift.slice.Slices.utf8Slice;
@@ -40,10 +50,76 @@ import static org.testng.Assert.assertTrue;
 public class TestMapBlock
         extends AbstractTestBlock
 {
+    private static final TypeManager TYPE_MANAGER = new TypeRegistry();
+
+    static {
+        // associate TYPE_MANAGER with a function manager
+        new FunctionManager(TYPE_MANAGER, new BlockEncodingManager(TYPE_MANAGER), new FeaturesConfig());
+    }
+
     @Test
     public void test()
     {
         testWith(createTestMap(9, 3, 4, 0, 8, 0, 6, 5));
+    }
+
+    @Test
+    public void testCompactBlock()
+    {
+        Block emptyBlock = new ByteArrayBlock(0, Optional.empty(), new byte[0]);
+        Block compactKeyBlock = new ByteArrayBlock(16, Optional.empty(), createExpectedValue(16).getBytes());
+        Block compactValueBlock = new ByteArrayBlock(16, Optional.empty(), createExpectedValue(16).getBytes());
+        Block inCompactKeyBlock = new ByteArrayBlock(16, Optional.empty(), createExpectedValue(17).getBytes());
+        Block inCompactValueBlock = new ByteArrayBlock(16, Optional.empty(), createExpectedValue(17).getBytes());
+        int[] offsets = {0, 1, 1, 2, 4, 8, 16};
+        boolean[] mapIsNull = {false, true, false, false, false, false};
+
+        testCompactBlock(mapType(TINYINT, TINYINT).createBlockFromKeyValue(Optional.empty(), new int[1], emptyBlock, emptyBlock));
+        testCompactBlock(mapType(TINYINT, TINYINT).createBlockFromKeyValue(Optional.of(mapIsNull), offsets, compactKeyBlock, compactValueBlock));
+        // TODO: Add test case for a sliced MapBlock
+
+        // underlying key/value block is not compact
+        testIncompactBlock(mapType(TINYINT, TINYINT).createBlockFromKeyValue(Optional.of(mapIsNull), offsets, inCompactKeyBlock, inCompactValueBlock));
+    }
+
+    // TODO: remove this test when we have a more unified testWith() using assertBlock()
+    @Test
+    public void testLazyHashTableBuildOverBlockRegion()
+    {
+        Map<String, Long>[] values = createTestMap(9, 3, 4, 0, 8, 0, 6, 5);
+        Block block = createBlockWithValuesFromKeyValueBlock(values);
+        BlockBuilder blockBuilder = createBlockBuilderWithValues(values);
+
+        // Create a MapBlock that is a region of another MapBlock. It doesn't have hashtables built at the time of creation.
+        int offset = block.getPositionCount() / 2;
+        Block blockRegion = block.getRegion(offset, block.getPositionCount() - offset);
+
+        assertFalse(((MapBlock) blockRegion).isHashTablesPresent());
+        assertFalse(((MapBlock) block).isHashTablesPresent());
+
+        // Lazily build the hashtables for the block region and use them to do position/value check.
+        Map<String, Long>[] expectedValues = Arrays.copyOfRange(values, values.length / 2, values.length);
+        assertBlock(blockRegion, () -> blockBuilder.newBlockBuilderLike(null), expectedValues);
+
+        assertTrue(((MapBlock) blockRegion).isHashTablesPresent());
+        assertTrue(((MapBlock) block).isHashTablesPresent());
+
+        Map<String, Long>[] valuesWithNull = alternatingNullValues(values);
+        Block blockWithNull = createBlockWithValuesFromKeyValueBlock(valuesWithNull);
+
+        // Create a MapBlock that is a region of another MapBlock with null values. It doesn't have hashtables built at the time of creation.
+        offset = blockWithNull.getPositionCount() / 2;
+        Block blockRegionWithNull = blockWithNull.getRegion(offset, blockWithNull.getPositionCount() - offset);
+
+        assertFalse(((MapBlock) blockRegionWithNull).isHashTablesPresent());
+        assertFalse(((MapBlock) blockWithNull).isHashTablesPresent());
+
+        // Lazily build the hashtables for the block region and use them to do position/value check.
+        Map<String, Long>[] expectedValuesWithNull = Arrays.copyOfRange(valuesWithNull, valuesWithNull.length / 2, valuesWithNull.length);
+        assertBlock(blockRegionWithNull, () -> blockBuilder.newBlockBuilderLike(null), expectedValuesWithNull);
+
+        assertTrue(((MapBlock) blockRegionWithNull).isHashTablesPresent());
+        assertTrue(((MapBlock) blockWithNull).isHashTablesPresent());
     }
 
     private Map<String, Long>[] createTestMap(int... entryCounts)
@@ -77,7 +153,7 @@ public class TestMapBlock
         assertBlockFilteredPositions(expectedValues, block, () -> blockBuilder.newBlockBuilderLike(null), 0, 1, 3, 4, 7);
         assertBlockFilteredPositions(expectedValues, block, () -> blockBuilder.newBlockBuilderLike(null), 2, 3, 5, 6);
 
-        Map<String, Long>[] expectedValuesWithNull = (Map<String, Long>[]) alternatingNullValues(expectedValues);
+        Map<String, Long>[] expectedValuesWithNull = alternatingNullValues(expectedValues);
         BlockBuilder blockBuilderWithNull = createBlockBuilderWithValues(expectedValuesWithNull);
 
         assertBlock(blockBuilderWithNull, () -> blockBuilder.newBlockBuilderLike(null), expectedValuesWithNull);
@@ -124,7 +200,7 @@ public class TestMapBlock
                 offsets[i + 1] = offsets[i] + map.size();
             }
         }
-        return mapType(VARCHAR, BIGINT).createBlockFromKeyValue(mapIsNull, offsets, createStringsBlock(keys), createLongsBlock(values));
+        return mapType(VARCHAR, BIGINT).createBlockFromKeyValue(Optional.of(mapIsNull), offsets, createStringsBlock(keys), createLongsBlock(values));
     }
 
     private void createBlockBuilderWithValues(Map<String, Long> map, BlockBuilder mapBlockBuilder)
@@ -198,5 +274,57 @@ public class TestMapBlock
             assertTrue(map.containsKey(actualKey));
             assertEquals(actualValue, map.get(actualKey));
         }
+    }
+
+    @Test
+    public void testCloseEntryStrict()
+            throws Exception
+    {
+        MapType mapType = mapType(BIGINT, BIGINT);
+        MapBlockBuilder mapBlockBuilder = (MapBlockBuilder) mapType.createBlockBuilder(null, 1);
+
+        // Add 100 maps with only one entry but the same key
+        for (int i = 0; i < 100; i++) {
+            BlockBuilder entryBuilder = mapBlockBuilder.beginBlockEntry();
+            BIGINT.writeLong(entryBuilder, 1);
+            BIGINT.writeLong(entryBuilder, -1);
+            mapBlockBuilder.closeEntry();
+        }
+
+        BlockBuilder entryBuilder = mapBlockBuilder.beginBlockEntry();
+        // Add 50 keys so we get some chance to get hash conflict
+        // The purpose of this test is to make sure offset is calculated correctly in MapBlockBuilder.closeEntryStrict()
+        for (int i = 0; i < 50; i++) {
+            BIGINT.writeLong(entryBuilder, i);
+            BIGINT.writeLong(entryBuilder, -1);
+        }
+        mapBlockBuilder.closeEntryStrict();
+    }
+
+    @Test
+    public void testEstimatedDataSizeForStats()
+    {
+        Map<String, Long>[] expectedValues = alternatingNullValues(createTestMap(9, 3, 4, 0, 8, 0, 6, 5));
+        BlockBuilder blockBuilder = createBlockBuilderWithValues(expectedValues);
+        Block block = blockBuilder.build();
+        assertEquals(block.getPositionCount(), expectedValues.length);
+        for (int i = 0; i < block.getPositionCount(); i++) {
+            int expectedSize = getExpectedEstimatedDataSize(expectedValues[i]);
+            assertEquals(blockBuilder.getEstimatedDataSizeForStats(i), expectedSize);
+            assertEquals(block.getEstimatedDataSizeForStats(i), expectedSize);
+        }
+    }
+
+    private static int getExpectedEstimatedDataSize(Map<String, Long> map)
+    {
+        if (map == null) {
+            return 0;
+        }
+        int size = 0;
+        for (Map.Entry<String, Long> entry : map.entrySet()) {
+            size += entry.getKey().length();
+            size += entry.getValue() == null ? 0 : Long.BYTES;
+        }
+        return size;
     }
 }

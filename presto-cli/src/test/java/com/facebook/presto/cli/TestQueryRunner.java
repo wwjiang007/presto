@@ -86,12 +86,15 @@ public class TestQueryRunner
                         server.url("/").uri(),
                         "user",
                         "source",
+                        Optional.empty(),
                         ImmutableSet.of(),
                         "clientInfo",
                         "catalog",
                         "schema",
+                        "path",
                         "America/Los_Angeles",
                         Locale.ENGLISH,
+                        ImmutableMap.of(),
                         ImmutableMap.of(),
                         ImmutableMap.of(),
                         ImmutableMap.of(),
@@ -120,6 +123,7 @@ public class TestQueryRunner
                 StatementStats.builder().setState("FINISHED").build(),
                 //new StatementStats("FINISHED", false, true, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null),
                 null,
+                ImmutableList.of(),
                 null,
                 null);
         return QUERY_RESULTS_CODEC.toJson(queryResults);
