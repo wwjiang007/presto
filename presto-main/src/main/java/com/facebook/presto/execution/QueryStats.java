@@ -15,7 +15,9 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.operator.BlockedReason;
 import com.facebook.presto.operator.OperatorStats;
+import com.facebook.presto.operator.TableWriterOperator;
 import com.facebook.presto.spi.eventlistener.StageGcStatistics;
+import com.facebook.presto.sql.planner.PlanFragment;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
@@ -26,13 +28,17 @@ import org.joda.time.DateTime;
 
 import javax.annotation.Nullable;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.Set;
 
+import static com.facebook.presto.execution.StageInfo.getAllStages;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctBytes;
+import static io.airlift.units.Duration.succinctDuration;
 import static java.lang.Math.min;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -47,14 +53,16 @@ public class QueryStats
 
     private final Duration elapsedTime;
     private final Duration queuedTime;
-    private final Duration executionTime;
     private final Duration resourceWaitingTime;
+    private final Duration dispatchingTime;
+    private final Duration executionTime;
     private final Duration analysisTime;
     private final Duration totalPlanningTime;
     private final Duration finishingTime;
 
     private final int totalTasks;
     private final int runningTasks;
+    private final int peakRunningTasks;
     private final int completedTasks;
 
     private final int totalDrivers;
@@ -74,9 +82,12 @@ public class QueryStats
     private final boolean scheduled;
     private final Duration totalScheduledTime;
     private final Duration totalCpuTime;
+    private final Duration retriedCpuTime;
     private final Duration totalBlockedTime;
     private final boolean fullyBlocked;
     private final Set<BlockedReason> blockedReasons;
+
+    private final DataSize totalAllocation;
 
     private final DataSize rawInputDataSize;
     private final long rawInputPositions;
@@ -107,6 +118,7 @@ public class QueryStats
             @JsonProperty("elapsedTime") Duration elapsedTime,
             @JsonProperty("queuedTime") Duration queuedTime,
             @JsonProperty("resourceWaitingTime") Duration resourceWaitingTime,
+            @JsonProperty("dispatchingTime") Duration dispatchingTime,
             @JsonProperty("executionTime") Duration executionTime,
             @JsonProperty("analysisTime") Duration analysisTime,
             @JsonProperty("totalPlanningTime") Duration totalPlanningTime,
@@ -114,6 +126,7 @@ public class QueryStats
 
             @JsonProperty("totalTasks") int totalTasks,
             @JsonProperty("runningTasks") int runningTasks,
+            @JsonProperty("peakRunningTasks") int peakRunningTasks,
             @JsonProperty("completedTasks") int completedTasks,
 
             @JsonProperty("totalDrivers") int totalDrivers,
@@ -133,9 +146,12 @@ public class QueryStats
             @JsonProperty("scheduled") boolean scheduled,
             @JsonProperty("totalScheduledTime") Duration totalScheduledTime,
             @JsonProperty("totalCpuTime") Duration totalCpuTime,
+            @JsonProperty("retriedCpuTime") Duration retriedCpuTime,
             @JsonProperty("totalBlockedTime") Duration totalBlockedTime,
             @JsonProperty("fullyBlocked") boolean fullyBlocked,
             @JsonProperty("blockedReasons") Set<BlockedReason> blockedReasons,
+
+            @JsonProperty("totalAllocation") DataSize totalAllocation,
 
             @JsonProperty("rawInputDataSize") DataSize rawInputDataSize,
             @JsonProperty("rawInputPositions") long rawInputPositions,
@@ -164,6 +180,7 @@ public class QueryStats
         this.elapsedTime = requireNonNull(elapsedTime, "elapsedTime is null");
         this.queuedTime = requireNonNull(queuedTime, "queuedTime is null");
         this.resourceWaitingTime = requireNonNull(resourceWaitingTime, "resourceWaitingTime is null");
+        this.dispatchingTime = requireNonNull(dispatchingTime, "dispatchingTime is null");
         this.executionTime = requireNonNull(executionTime, "executionTime is null");
         this.analysisTime = requireNonNull(analysisTime, "analysisTime is null");
         this.totalPlanningTime = requireNonNull(totalPlanningTime, "totalPlanningTime is null");
@@ -173,6 +190,8 @@ public class QueryStats
         this.totalTasks = totalTasks;
         checkArgument(runningTasks >= 0, "runningTasks is negative");
         this.runningTasks = runningTasks;
+        checkArgument(peakRunningTasks >= 0, "peakRunningTasks is negative");
+        this.peakRunningTasks = peakRunningTasks;
         checkArgument(completedTasks >= 0, "completedTasks is negative");
         this.completedTasks = completedTasks;
 
@@ -197,9 +216,12 @@ public class QueryStats
         this.scheduled = scheduled;
         this.totalScheduledTime = requireNonNull(totalScheduledTime, "totalScheduledTime is null");
         this.totalCpuTime = requireNonNull(totalCpuTime, "totalCpuTime is null");
+        this.retriedCpuTime = requireNonNull(retriedCpuTime, "totalCpuTime is null");
         this.totalBlockedTime = requireNonNull(totalBlockedTime, "totalBlockedTime is null");
         this.fullyBlocked = fullyBlocked;
         this.blockedReasons = ImmutableSet.copyOf(requireNonNull(blockedReasons, "blockedReasons is null"));
+
+        this.totalAllocation = requireNonNull(totalAllocation, "totalAllocation is null");
 
         this.rawInputDataSize = requireNonNull(rawInputDataSize, "rawInputDataSize is null");
         checkArgument(rawInputPositions >= 0, "rawInputPositions is negative");
@@ -224,6 +246,205 @@ public class QueryStats
         this.operatorSummaries = ImmutableList.copyOf(requireNonNull(operatorSummaries, "operatorSummaries is null"));
     }
 
+    public static QueryStats create(
+            QueryStateTimer queryStateTimer,
+            Optional<StageInfo> rootStage,
+            int peakRunningTasks,
+            DataSize peakUserMemoryReservation,
+            DataSize peakTotalMemoryReservation,
+            DataSize peakTaskUserMemory,
+            DataSize peakTaskTotalMemory)
+    {
+        int totalTasks = 0;
+        int runningTasks = 0;
+        int completedTasks = 0;
+
+        int totalDrivers = 0;
+        int queuedDrivers = 0;
+        int runningDrivers = 0;
+        int blockedDrivers = 0;
+        int completedDrivers = 0;
+
+        long cumulativeUserMemory = 0;
+        long userMemoryReservation = 0;
+        long totalMemoryReservation = 0;
+
+        long totalScheduledTime = 0;
+        long totalCpuTime = 0;
+        long retriedCpuTime = 0;
+        long totalBlockedTime = 0;
+
+        long totalAllocation = 0;
+
+        long rawInputDataSize = 0;
+        long rawInputPositions = 0;
+
+        long processedInputDataSize = 0;
+        long processedInputPositions = 0;
+
+        long outputDataSize = 0;
+        long outputPositions = 0;
+
+        long writtenOutputPositions = 0;
+        long writtenOutputLogicalDataSize = 0;
+        long writtenOutputPhysicalDataSize = 0;
+
+        long writtenIntermediatePhysicalDataSize = 0;
+
+        ImmutableList.Builder<StageGcStatistics> stageGcStatistics = ImmutableList.builder();
+
+        boolean fullyBlocked = rootStage.isPresent();
+        Set<BlockedReason> blockedReasons = new HashSet<>();
+
+        ImmutableList.Builder<OperatorStats> operatorStatsSummary = ImmutableList.builder();
+        boolean completeInfo = true;
+        for (StageInfo stageInfo : getAllStages(rootStage)) {
+            StageExecutionStats stageExecutionStats = stageInfo.getLatestAttemptExecutionInfo().getStats();
+            totalTasks += stageExecutionStats.getTotalTasks();
+            runningTasks += stageExecutionStats.getRunningTasks();
+            completedTasks += stageExecutionStats.getCompletedTasks();
+
+            totalDrivers += stageExecutionStats.getTotalDrivers();
+            queuedDrivers += stageExecutionStats.getQueuedDrivers();
+            runningDrivers += stageExecutionStats.getRunningDrivers();
+            blockedDrivers += stageExecutionStats.getBlockedDrivers();
+            completedDrivers += stageExecutionStats.getCompletedDrivers();
+
+            cumulativeUserMemory += stageExecutionStats.getCumulativeUserMemory();
+            userMemoryReservation += stageExecutionStats.getUserMemoryReservation().toBytes();
+            totalMemoryReservation += stageExecutionStats.getTotalMemoryReservation().toBytes();
+            totalScheduledTime += stageExecutionStats.getTotalScheduledTime().roundTo(MILLISECONDS);
+            totalCpuTime += stageExecutionStats.getTotalCpuTime().roundTo(MILLISECONDS);
+            retriedCpuTime += computeRetriedCpuTime(stageInfo);
+            totalBlockedTime += stageExecutionStats.getTotalBlockedTime().roundTo(MILLISECONDS);
+            if (!stageInfo.getLatestAttemptExecutionInfo().getState().isDone()) {
+                fullyBlocked &= stageExecutionStats.isFullyBlocked();
+                blockedReasons.addAll(stageExecutionStats.getBlockedReasons());
+            }
+
+            totalAllocation += stageExecutionStats.getTotalAllocation().toBytes();
+
+            if (stageInfo.getPlan().isPresent()) {
+                PlanFragment plan = stageInfo.getPlan().get();
+                if (!plan.getTableScanSchedulingOrder().isEmpty()) {
+                    rawInputDataSize += stageExecutionStats.getRawInputDataSize().toBytes();
+                    rawInputPositions += stageExecutionStats.getRawInputPositions();
+
+                    processedInputDataSize += stageExecutionStats.getProcessedInputDataSize().toBytes();
+                    processedInputPositions += stageExecutionStats.getProcessedInputPositions();
+                }
+
+                if (plan.isOutputTableWriterFragment()) {
+                    writtenOutputPositions += stageExecutionStats.getOperatorSummaries().stream()
+                            .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
+                            .mapToLong(OperatorStats::getInputPositions)
+                            .sum();
+                    writtenOutputLogicalDataSize += stageExecutionStats.getOperatorSummaries().stream()
+                            .filter(stats -> stats.getOperatorType().equals(TableWriterOperator.class.getSimpleName()))
+                            .mapToLong(stats -> stats.getInputDataSize().toBytes())
+                            .sum();
+                    writtenOutputPhysicalDataSize += stageExecutionStats.getPhysicalWrittenDataSize().toBytes();
+                }
+                else {
+                    writtenIntermediatePhysicalDataSize += stageExecutionStats.getPhysicalWrittenDataSize().toBytes();
+                }
+            }
+
+            stageGcStatistics.add(stageExecutionStats.getGcInfo());
+
+            completeInfo = completeInfo && stageInfo.isFinalStageInfo();
+            operatorStatsSummary.addAll(stageExecutionStats.getOperatorSummaries());
+        }
+
+        if (rootStage.isPresent()) {
+            StageExecutionStats outputStageStats = rootStage.get().getLatestAttemptExecutionInfo().getStats();
+            outputDataSize += outputStageStats.getOutputDataSize().toBytes();
+            outputPositions += outputStageStats.getOutputPositions();
+        }
+
+        return new QueryStats(
+                queryStateTimer.getCreateTime(),
+                queryStateTimer.getExecutionStartTime().orElse(null),
+                queryStateTimer.getLastHeartbeat(),
+                queryStateTimer.getEndTime().orElse(null),
+
+                queryStateTimer.getElapsedTime(),
+                queryStateTimer.getQueuedTime(),
+                queryStateTimer.getResourceWaitingTime(),
+                queryStateTimer.getDispatchingTime(),
+                queryStateTimer.getExecutionTime(),
+                queryStateTimer.getAnalysisTime(),
+                queryStateTimer.getPlanningTime(),
+                queryStateTimer.getFinishingTime(),
+
+                totalTasks,
+                runningTasks,
+                peakRunningTasks,
+                completedTasks,
+
+                totalDrivers,
+                queuedDrivers,
+                runningDrivers,
+                blockedDrivers,
+                completedDrivers,
+
+                cumulativeUserMemory,
+                succinctBytes(userMemoryReservation),
+                succinctBytes(totalMemoryReservation),
+                peakUserMemoryReservation,
+                peakTotalMemoryReservation,
+                peakTaskUserMemory,
+                peakTaskTotalMemory,
+
+                isScheduled(rootStage),
+
+                succinctDuration(totalScheduledTime, MILLISECONDS),
+                succinctDuration(totalCpuTime, MILLISECONDS),
+                succinctDuration(retriedCpuTime, MILLISECONDS),
+                succinctDuration(totalBlockedTime, MILLISECONDS),
+                fullyBlocked,
+                blockedReasons,
+
+                succinctBytes(totalAllocation),
+
+                succinctBytes(rawInputDataSize),
+                rawInputPositions,
+                succinctBytes(processedInputDataSize),
+                processedInputPositions,
+                succinctBytes(outputDataSize),
+                outputPositions,
+
+                writtenOutputPositions,
+                succinctBytes(writtenOutputLogicalDataSize),
+                succinctBytes(writtenOutputPhysicalDataSize),
+
+                succinctBytes(writtenIntermediatePhysicalDataSize),
+
+                stageGcStatistics.build(),
+
+                operatorStatsSummary.build());
+    }
+
+    private static boolean isScheduled(Optional<StageInfo> rootStage)
+    {
+        if (!rootStage.isPresent()) {
+            return false;
+        }
+        return getAllStages(rootStage).stream()
+                .map(StageInfo::getLatestAttemptExecutionInfo)
+                .map(StageExecutionInfo::getState)
+                .allMatch(state -> (state == StageExecutionState.RUNNING) || state.isDone());
+    }
+
+    private static long computeRetriedCpuTime(StageInfo stageInfo)
+    {
+        long stageRetriedCpuTime = stageInfo.getPreviousAttemptsExecutionInfos().stream()
+                .mapToLong(executionInfo -> executionInfo.getStats().getTotalCpuTime().roundTo(MILLISECONDS))
+                .sum();
+        long taskRetriedCpuTime = stageInfo.getLatestAttemptExecutionInfo().getStats().getRetriedCpuTime().roundTo(MILLISECONDS);
+        return stageRetriedCpuTime + taskRetriedCpuTime;
+    }
+
     public static QueryStats immediateFailureQueryStats()
     {
         DateTime now = DateTime.now();
@@ -239,6 +460,8 @@ public class QueryStats
                 new Duration(0, MILLISECONDS),
                 new Duration(0, MILLISECONDS),
                 new Duration(0, MILLISECONDS),
+                new Duration(0, MILLISECONDS),
+                0,
                 0,
                 0,
                 0,
@@ -255,11 +478,13 @@ public class QueryStats
                 new DataSize(0, BYTE),
                 new DataSize(0, BYTE),
                 false,
+                new Duration(0, MILLISECONDS),
                 new Duration(0, MILLISECONDS),
                 new Duration(0, MILLISECONDS),
                 new Duration(0, MILLISECONDS),
                 false,
                 ImmutableSet.of(),
+                new DataSize(0, BYTE),
                 new DataSize(0, BYTE),
                 0,
                 new DataSize(0, BYTE),
@@ -312,6 +537,12 @@ public class QueryStats
     }
 
     @JsonProperty
+    public Duration getDispatchingTime()
+    {
+        return dispatchingTime;
+    }
+
+    @JsonProperty
     public Duration getQueuedTime()
     {
         return queuedTime;
@@ -351,6 +582,12 @@ public class QueryStats
     public int getRunningTasks()
     {
         return runningTasks;
+    }
+
+    @JsonProperty
+    public int getPeakRunningTasks()
+    {
+        return peakRunningTasks;
     }
 
     @JsonProperty
@@ -450,6 +687,12 @@ public class QueryStats
     }
 
     @JsonProperty
+    public Duration getRetriedCpuTime()
+    {
+        return retriedCpuTime;
+    }
+
+    @JsonProperty
     public Duration getTotalBlockedTime()
     {
         return totalBlockedTime;
@@ -465,6 +708,12 @@ public class QueryStats
     public Set<BlockedReason> getBlockedReasons()
     {
         return blockedReasons;
+    }
+
+    @JsonProperty
+    public DataSize getTotalAllocation()
+    {
+        return totalAllocation;
     }
 
     @JsonProperty

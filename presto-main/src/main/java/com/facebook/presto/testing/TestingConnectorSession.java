@@ -13,12 +13,13 @@
  */
 package com.facebook.presto.testing;
 
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.TimeZoneKey;
 import com.facebook.presto.execution.QueryIdGenerator;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.security.ConnectorIdentity;
 import com.facebook.presto.spi.session.PropertyMetadata;
-import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -29,8 +30,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.common.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_SESSION_PROPERTY;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
@@ -44,17 +45,17 @@ public class TestingConnectorSession
     private final String queryId;
     private final ConnectorIdentity identity;
     private final Optional<String> source;
-    private final TimeZoneKey timeZoneKey;
     private final Locale locale;
     private final Optional<String> traceToken;
     private final long startTime;
     private final Map<String, PropertyMetadata<?>> properties;
     private final Map<String, Object> propertyValues;
-    private final boolean isLegacyTimestamp;
+    private final Optional<String> clientInfo;
+    private final SqlFunctionProperties sqlFunctionProperties;
 
     public TestingConnectorSession(List<PropertyMetadata<?>> properties)
     {
-        this("user", Optional.of("test"), Optional.empty(), UTC_KEY, ENGLISH, System.currentTimeMillis(), properties, ImmutableMap.of(), new FeaturesConfig().isLegacyTimestamp());
+        this("user", Optional.of("test"), Optional.empty(), UTC_KEY, ENGLISH, System.currentTimeMillis(), properties, ImmutableMap.of(), new FeaturesConfig().isLegacyTimestamp(), Optional.empty());
     }
 
     public TestingConnectorSession(
@@ -66,18 +67,25 @@ public class TestingConnectorSession
             long startTime,
             List<PropertyMetadata<?>> propertyMetadatas,
             Map<String, Object> propertyValues,
-            boolean isLegacyTimestamp)
+            boolean isLegacyTimestamp,
+            Optional<String> clientInfo)
     {
         this.queryId = queryIdGenerator.createNextQueryId().toString();
         this.identity = new ConnectorIdentity(requireNonNull(user, "user is null"), Optional.empty(), Optional.empty());
         this.source = requireNonNull(source, "source is null");
         this.traceToken = requireNonNull(traceToken, "traceToken is null");
-        this.timeZoneKey = requireNonNull(timeZoneKey, "timeZoneKey is null");
         this.locale = requireNonNull(locale, "locale is null");
         this.startTime = startTime;
         this.properties = Maps.uniqueIndex(propertyMetadatas, PropertyMetadata::getName);
         this.propertyValues = ImmutableMap.copyOf(propertyValues);
-        this.isLegacyTimestamp = isLegacyTimestamp;
+        this.clientInfo = clientInfo;
+        this.sqlFunctionProperties = SqlFunctionProperties.builder()
+                .setTimeZoneKey(requireNonNull(timeZoneKey, "timeZoneKey is null"))
+                .setLegacyTimestamp(isLegacyTimestamp)
+                .setSessionStartTime(startTime)
+                .setSessionLocale(locale)
+                .setSessionUser(user)
+                .build();
     }
 
     @Override
@@ -99,12 +107,6 @@ public class TestingConnectorSession
     }
 
     @Override
-    public TimeZoneKey getTimeZoneKey()
-    {
-        return timeZoneKey;
-    }
-
-    @Override
     public Locale getLocale()
     {
         return locale;
@@ -123,9 +125,15 @@ public class TestingConnectorSession
     }
 
     @Override
-    public boolean isLegacyTimestamp()
+    public Optional<String> getClientInfo()
     {
-        return isLegacyTimestamp;
+        return clientInfo;
+    }
+
+    @Override
+    public SqlFunctionProperties getSqlFunctionProperties()
+    {
+        return sqlFunctionProperties;
     }
 
     @Override
@@ -149,10 +157,11 @@ public class TestingConnectorSession
                 .add("user", getUser())
                 .add("source", source.orElse(null))
                 .add("traceToken", traceToken.orElse(null))
-                .add("timeZoneKey", timeZoneKey)
                 .add("locale", locale)
                 .add("startTime", startTime)
+                .add("sqlFunctionProperties", sqlFunctionProperties)
                 .add("properties", propertyValues)
+                .add("clientInfo", clientInfo)
                 .omitNullValues()
                 .toString();
     }

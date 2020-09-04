@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.execution;
 
+import com.facebook.airlift.concurrent.SetThreadName;
 import com.facebook.presto.event.SplitMonitor;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
 import com.facebook.presto.execution.buffer.BufferState;
@@ -27,8 +28,8 @@ import com.facebook.presto.operator.PipelineContext;
 import com.facebook.presto.operator.PipelineExecutionStrategy;
 import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.operator.TaskContext;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner.LocalExecutionPlan;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -37,7 +38,6 @@ import com.google.common.collect.Iterables;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import io.airlift.concurrent.SetThreadName;
 import io.airlift.units.Duration;
 
 import javax.annotation.Nullable;

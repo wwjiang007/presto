@@ -13,14 +13,13 @@
  */
 package com.facebook.presto.verifier.resolver;
 
-import com.facebook.presto.verifier.framework.QueryException;
+import com.facebook.presto.verifier.framework.PrestoQueryException;
 import org.testng.annotations.Test;
 
 import java.util.Optional;
 
 import static com.facebook.presto.spi.StandardErrorCode.EXCEEDED_GLOBAL_MEMORY_LIMIT;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.TEST;
-import static com.facebook.presto.verifier.framework.QueryOrigin.forMain;
+import static com.facebook.presto.verifier.framework.QueryStage.TEST_MAIN;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 
@@ -35,14 +34,15 @@ public class TestExceededGlobalMemoryLimitFailureResolver
     @Test
     public void testLowerControlMemory()
     {
-        assertFalse(getFailureResolver().resolve(
+        assertFalse(getFailureResolver().resolveQueryFailure(
                 CONTROL_QUERY_STATS,
-                QueryException.forPresto(
+                new PrestoQueryException(
                         new RuntimeException(),
-                        Optional.of(EXCEEDED_GLOBAL_MEMORY_LIMIT),
                         false,
-                        Optional.of(createQueryStats(CONTROL_CPU_TIME_MILLIS, 700L * 1024 * 1024 * 1024)),
-                        forMain(TEST)))
+                        TEST_MAIN,
+                        Optional.of(EXCEEDED_GLOBAL_MEMORY_LIMIT),
+                        createQueryActionStats(CONTROL_CPU_TIME_MILLIS, 700L * 1024 * 1024 * 1024)),
+                Optional.empty())
                 .isPresent());
     }
 
@@ -50,14 +50,15 @@ public class TestExceededGlobalMemoryLimitFailureResolver
     public void testResolved()
     {
         assertEquals(
-                getFailureResolver().resolve(
+                getFailureResolver().resolveQueryFailure(
                         CONTROL_QUERY_STATS,
-                        QueryException.forPresto(
+                        new PrestoQueryException(
                                 new RuntimeException(),
-                                Optional.of(EXCEEDED_GLOBAL_MEMORY_LIMIT),
                                 false,
-                                Optional.of(createQueryStats(CONTROL_CPU_TIME_MILLIS, 500L * 1024 * 1024 * 1024)),
-                                forMain(TEST))),
-                Optional.of("Auto Resolved: Control query uses more memory than test cluster limit"));
+                                TEST_MAIN,
+                                Optional.of(EXCEEDED_GLOBAL_MEMORY_LIMIT),
+                                createQueryActionStats(CONTROL_CPU_TIME_MILLIS, 500L * 1024 * 1024 * 1024)),
+                        Optional.empty()),
+                Optional.of("Control query uses more memory than the test cluster memory limit"));
     }
 }

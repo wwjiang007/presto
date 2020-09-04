@@ -81,6 +81,9 @@ String Functions
 
     Replaces all instances of ``search`` with ``replace`` in ``string``.
 
+    If ``search`` is an empty string, inserts ``replace`` in front of every
+    character and at the end of the ``string``.
+
 .. function:: reverse(string) -> varchar
 
     Returns ``string`` with the characters in reverse order.
@@ -119,12 +122,12 @@ String Functions
     each pair into key and value. Note that ``entryDelimiter`` and ``keyValueDelimiter`` are
     interpreted literally, i.e., as full string matches.
 
-.. function:: split_to_map(string, entryDelimiter, keyValueDelimiter, function(k, v1, v2, res)) -> map<varchar, varchar>
+.. function:: split_to_map(string, entryDelimiter, keyValueDelimiter, function(K,V1,V2,R)) -> map<varchar, varchar>
 
     Splits ``string`` by ``entryDelimiter`` and ``keyValueDelimiter`` and returns a map.
     ``entryDelimiter`` splits ``string`` into key-value pairs. ``keyValueDelimiter`` splits
     each pair into key and value. Note that ``entryDelimiter`` and ``keyValueDelimiter`` are
-    interpreted literally, i.e., as full string matches. ``function(k, v1, v2, res)``
+    interpreted literally, i.e., as full string matches. ``function(K,V1,V2,R)``
     is invoked in cases of duplicate keys to resolve the value that should be in the map.
 
         SELECT(split_to_map('a:1;b:2;a:3', ';', ':', (k, v1, v2) -> v1)); -- {"a": "1", "b": "2"}

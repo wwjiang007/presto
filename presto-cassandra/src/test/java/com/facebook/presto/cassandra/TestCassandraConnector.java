@@ -14,6 +14,7 @@
 package com.facebook.presto.cassandra;
 
 import com.datastax.driver.core.utils.Bytes;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
@@ -28,12 +29,13 @@ import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
+import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.connector.Connector;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.facebook.presto.spi.connector.ConnectorRecordSetProvider;
 import com.facebook.presto.spi.connector.ConnectorSplitManager;
+import com.facebook.presto.spi.connector.ConnectorSplitManager.SplitSchedulingContext;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.TestingConnectorContext;
 import com.facebook.presto.testing.TestingConnectorSession;
 import com.google.common.collect.ImmutableList;
@@ -47,23 +49,23 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
+import static com.facebook.airlift.testing.Assertions.assertInstanceOf;
 import static com.facebook.presto.cassandra.CassandraTestingUtils.TABLE_ALL_TYPES;
 import static com.facebook.presto.cassandra.CassandraTestingUtils.createTestTables;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.TimeZoneKey.UTC_KEY;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.Varchars.isVarcharType;
 import static com.facebook.presto.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy.UNGROUPED_SCHEDULING;
 import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
-import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
-import static io.airlift.testing.Assertions.assertInstanceOf;
 import static java.util.Locale.ENGLISH;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
@@ -84,7 +86,8 @@ public class TestCassandraConnector
             System.currentTimeMillis(),
             new CassandraSessionProperties(new CassandraClientConfig()).getSessionProperties(),
             ImmutableMap.of(),
-            true);
+            true,
+            Optional.empty());
     protected String database;
     protected SchemaTableName table;
     protected SchemaTableName tableUnpartitioned;
@@ -176,7 +179,7 @@ public class TestCassandraConnector
 
         List<ConnectorTableLayoutResult> layouts = metadata.getTableLayouts(SESSION, tableHandle, Constraint.alwaysTrue(), Optional.empty());
         ConnectorTableLayoutHandle layout = getOnlyElement(layouts).getTableLayout().getHandle();
-        List<ConnectorSplit> splits = getAllSplits(splitManager.getSplits(transaction, SESSION, layout, UNGROUPED_SCHEDULING));
+        List<ConnectorSplit> splits = getAllSplits(splitManager.getSplits(transaction, SESSION, layout, new SplitSchedulingContext(UNGROUPED_SCHEDULING, false, WarningCollector.NOOP)));
 
         long rowNumber = 0;
         for (ConnectorSplit split : splits) {

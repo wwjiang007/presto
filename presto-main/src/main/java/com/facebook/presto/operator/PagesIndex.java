@@ -13,18 +13,20 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.Session;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.PageBuilder;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.SortOrder;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.geospatial.Rectangle;
+import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.SpatialIndexBuilderOperator.SpatialPredicate;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.PageBuilder;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.SortOrder;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
 import com.facebook.presto.sql.gen.JoinCompiler.LookupSourceSupplierFactory;
@@ -32,7 +34,6 @@ import com.facebook.presto.sql.gen.JoinFilterFunctionCompiler.JoinFilterFunction
 import com.facebook.presto.sql.gen.OrderingCompiler;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
-import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import it.unimi.dsi.fastutil.Swapper;
@@ -464,11 +465,12 @@ public class PagesIndex
             SpatialPredicate spatialRelationshipTest,
             Optional<JoinFilterFunctionFactory> filterFunctionFactory,
             List<Integer> outputChannels,
-            Map<Integer, Rectangle> partitions)
+            Map<Integer, Rectangle> partitions,
+            LocalMemoryContext localUserMemoryContext)
     {
         // TODO probably shouldn't copy to reduce memory and for memory accounting's sake
         List<List<Block>> channels = ImmutableList.copyOf(this.channels);
-        return new PagesSpatialIndexSupplier(session, valueAddresses, types, outputChannels, channels, geometryChannel, radiusChannel, partitionChannel, spatialRelationshipTest, filterFunctionFactory, partitions);
+        return new PagesSpatialIndexSupplier(session, valueAddresses, types, outputChannels, channels, geometryChannel, radiusChannel, partitionChannel, spatialRelationshipTest, filterFunctionFactory, partitions, localUserMemoryContext);
     }
 
     public LookupSourceSupplier createLookupSourceSupplier(
@@ -562,7 +564,6 @@ public class PagesIndex
         };
     }
 
-    // TODO: This is similar to what OrderByOperator does, look into reusing this logic in OrderByOperator as well.
     public Iterator<Page> getSortedPages()
     {
         return new AbstractIterator<Page>()

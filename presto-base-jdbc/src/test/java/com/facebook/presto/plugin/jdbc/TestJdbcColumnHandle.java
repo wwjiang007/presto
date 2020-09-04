@@ -13,15 +13,15 @@
  */
 package com.facebook.presto.plugin.jdbc;
 
-import io.airlift.testing.EquivalenceTester;
+import com.facebook.airlift.testing.EquivalenceTester;
 import org.testng.annotations.Test;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.plugin.jdbc.MetadataUtil.COLUMN_CODEC;
 import static com.facebook.presto.plugin.jdbc.MetadataUtil.assertJsonRoundTrip;
 import static com.facebook.presto.plugin.jdbc.TestingJdbcTypeHandle.JDBC_BIGINT;
 import static com.facebook.presto.plugin.jdbc.TestingJdbcTypeHandle.JDBC_VARCHAR;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 
 public class TestJdbcColumnHandle
 {

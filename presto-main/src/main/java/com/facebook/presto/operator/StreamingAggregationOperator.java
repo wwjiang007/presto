@@ -13,15 +13,15 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.PageBuilder;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.aggregation.AccumulatorFactory;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.PageBuilder;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.plan.AggregationNode.Step;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.AggregationNode.Step;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 
@@ -188,9 +188,9 @@ public class StreamingAggregationOperator
     {
         requireNonNull(page, "page is null");
 
-        Page groupByPage = extractColumns(page, groupByChannels);
+        Page groupByPage = page.extractChannels(groupByChannels);
         if (currentGroup != null) {
-            if (!pagesHashStrategy.rowEqualsRow(0, extractColumns(currentGroup, groupByChannels), 0, groupByPage)) {
+            if (!pagesHashStrategy.rowEqualsRow(0, currentGroup.extractChannels(groupByChannels), 0, groupByPage)) {
                 // page starts with new group, so flush it
                 evaluateAndFlushGroup(currentGroup, 0);
             }
@@ -215,19 +215,11 @@ public class StreamingAggregationOperator
         }
     }
 
-    private static Page extractColumns(Page page, int[] channels)
-    {
-        Block[] newBlocks = new Block[channels.length];
-        for (int i = 0; i < channels.length; i++) {
-            newBlocks[i] = page.getBlock(channels[i]);
-        }
-        return new Page(page.getPositionCount(), newBlocks);
-    }
-
     private void addRowsToAggregates(Page page, int startPosition, int endPosition)
     {
+        Page region = page.getRegion(startPosition, endPosition - startPosition + 1);
         for (Aggregator aggregator : aggregates) {
-            aggregator.processPage(page.getRegion(startPosition, endPosition - startPosition + 1));
+            aggregator.processPage(region);
         }
     }
 

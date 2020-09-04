@@ -13,9 +13,11 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.airlift.stats.cardinality.HyperLogLog;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.type.StandardTypes;
 import com.facebook.presto.operator.aggregation.state.HyperLogLogState;
 import com.facebook.presto.operator.aggregation.state.StateCompiler;
-import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.function.AccumulatorStateSerializer;
 import com.facebook.presto.spi.function.AggregationFunction;
 import com.facebook.presto.spi.function.AggregationState;
@@ -23,9 +25,7 @@ import com.facebook.presto.spi.function.CombineFunction;
 import com.facebook.presto.spi.function.InputFunction;
 import com.facebook.presto.spi.function.OutputFunction;
 import com.facebook.presto.spi.function.SqlType;
-import com.facebook.presto.spi.type.StandardTypes;
 import io.airlift.slice.Slice;
-import io.airlift.stats.cardinality.HyperLogLog;
 
 @AggregationFunction("merge")
 public final class MergeHyperLogLogAggregation

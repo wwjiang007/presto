@@ -60,12 +60,14 @@ public class TestBasicQueryInfo
                                 Duration.valueOf("8m"),
                                 Duration.valueOf("7m"),
                                 Duration.valueOf("34m"),
+                                Duration.valueOf("35m"),
                                 Duration.valueOf("44m"),
                                 Duration.valueOf("9m"),
                                 Duration.valueOf("10m"),
                                 Duration.valueOf("11m"),
                                 13,
                                 14,
+                                21,
                                 15,
                                 16,
                                 17,
@@ -82,9 +84,11 @@ public class TestBasicQueryInfo
                                 true,
                                 Duration.valueOf("23m"),
                                 Duration.valueOf("24m"),
+                                Duration.valueOf("0m"),
                                 Duration.valueOf("26m"),
                                 true,
                                 ImmutableSet.of(BlockedReason.WAITING_FOR_MEMORY),
+                                DataSize.valueOf("123MB"),
                                 DataSize.valueOf("27GB"),
                                 28,
                                 DataSize.valueOf("29GB"),
@@ -97,6 +101,7 @@ public class TestBasicQueryInfo
                                 DataSize.valueOf("36GB"),
                                 ImmutableList.of(new StageGcStatistics(
                                         101,
+                                        1002,
                                         102,
                                         103,
                                         104,
@@ -104,7 +109,6 @@ public class TestBasicQueryInfo
                                         106,
                                         107)),
                                 ImmutableList.of()),
-                        Optional.empty(),
                         Optional.empty(),
                         Optional.empty(),
                         ImmutableMap.of(),
@@ -123,7 +127,9 @@ public class TestBasicQueryInfo
                         Optional.empty(),
                         false,
                         Optional.empty(),
-                        Optional.of(QueryType.INSERT)));
+                        Optional.of(QueryType.INSERT),
+                        Optional.empty(),
+                        Optional.empty()));
 
         assertEquals(basicInfo.getQueryId().getId(), "0");
         assertEquals(basicInfo.getState(), RUNNING);
@@ -145,10 +151,15 @@ public class TestBasicQueryInfo
         assertEquals(basicInfo.getQueryStats().getCumulativeUserMemory(), 20.0);
         assertEquals(basicInfo.getQueryStats().getUserMemoryReservation(), DataSize.valueOf("21GB"));
         assertEquals(basicInfo.getQueryStats().getPeakUserMemoryReservation(), DataSize.valueOf("23GB"));
+        assertEquals(basicInfo.getQueryStats().getPeakTotalMemoryReservation(), DataSize.valueOf("24GB"));
+        assertEquals(basicInfo.getQueryStats().getPeakTaskTotalMemoryReservation(), DataSize.valueOf("26GB"));
+
         assertEquals(basicInfo.getQueryStats().getTotalCpuTime(), Duration.valueOf("24m"));
 
         assertEquals(basicInfo.getQueryStats().isFullyBlocked(), true);
         assertEquals(basicInfo.getQueryStats().getBlockedReasons(), ImmutableSet.of(BlockedReason.WAITING_FOR_MEMORY));
+
+        assertEquals(basicInfo.getQueryStats().getTotalAllocation(), DataSize.valueOf("123MB"));
 
         assertEquals(basicInfo.getQueryStats().getProgressPercentage(), OptionalDouble.of(100));
 

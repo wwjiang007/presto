@@ -13,15 +13,15 @@
  */
 package com.facebook.presto.sql.analyzer;
 
+import com.facebook.airlift.configuration.Config;
+import com.facebook.airlift.configuration.ConfigDescription;
+import com.facebook.airlift.configuration.DefunctConfig;
 import com.facebook.presto.operator.aggregation.arrayagg.ArrayAggGroupImplementation;
 import com.facebook.presto.operator.aggregation.histogram.HistogramGroupImplementation;
 import com.facebook.presto.operator.aggregation.multimapagg.MultimapAggGroupImplementation;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
-import io.airlift.configuration.Config;
-import io.airlift.configuration.ConfigDescription;
-import io.airlift.configuration.DefunctConfig;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MaxDataSize;
@@ -36,6 +36,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.AggregationPartitioningMergingStrategy.LEGACY;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.PARTITIONED;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
 import static com.facebook.presto.sql.analyzer.RegexLibrary.JONI;
@@ -43,6 +44,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 @DefunctConfig({
         "resource-group-manager",
@@ -65,9 +67,14 @@ public class FeaturesConfig
     private boolean distributedIndexJoinsEnabled;
     private JoinDistributionType joinDistributionType = PARTITIONED;
     private DataSize joinMaxBroadcastTableSize;
-    private boolean colocatedJoinsEnabled;
-    private boolean groupedExecutionForAggregationEnabled;
-    private boolean dynamicScheduleForGroupedExecution;
+    private boolean colocatedJoinsEnabled = true;
+    private boolean groupedExecutionForAggregationEnabled = true;
+    private boolean groupedExecutionForJoinEnabled = true;
+    private boolean groupedExecutionEnabled = true;
+    private boolean dynamicScheduleForGroupedExecution = true;
+    private boolean recoverableGroupedExecutionEnabled;
+    private double maxFailedTaskPercentage = 0.3;
+    private int maxStageRetries;
     private int concurrentLifespansPerTask;
     private boolean spatialJoinsEnabled = true;
     private boolean fastInequalityJoins = true;
@@ -77,6 +84,7 @@ public class FeaturesConfig
     private boolean redistributeWrites = true;
     private boolean scaleWriters;
     private DataSize writerMinSize = new DataSize(32, DataSize.Unit.MEGABYTE);
+    private boolean optimizedScaleWriterProducerBuffer;
     private boolean optimizeMetadataQueries;
     private boolean optimizeHashGeneration = true;
     private boolean enableIntermediateAggregations;
@@ -89,6 +97,7 @@ public class FeaturesConfig
     private boolean legacyMapSubscript;
     private boolean legacyRowFieldOrdinalAccess;
     private boolean legacyCharToVarcharCoercion;
+    private boolean legacyDateTimestampToVarcharCoercion;
     private boolean optimizeMixedDistinctAggregations;
     private boolean forceSingleNodeOutput = true;
     private boolean pagesIndexEagerCompactionEnabled;
@@ -108,7 +117,9 @@ public class FeaturesConfig
     private int spillerThreads = 4;
     private double spillMaxUsedSpaceThreshold = 0.9;
     private boolean iterativeOptimizerEnabled = true;
+    private boolean runtimeOptimizerEnabled;
     private boolean enableStatsCalculator = true;
+    private boolean enableStatsCollectionForTemporaryTable;
     private boolean ignoreStatsCalculatorFailures = true;
     private boolean printStatsForNonJoinQuery;
     private boolean defaultFilterFactorEnabled;
@@ -120,15 +131,49 @@ public class FeaturesConfig
     private boolean preferPartialAggregation = true;
     private boolean optimizeTopNRowNumber = true;
     private boolean pushLimitThroughOuterJoin = true;
+    private boolean optimizeFullOuterJoinWithCoalesce = true;
 
     private Duration iterativeOptimizerTimeout = new Duration(3, MINUTES); // by default let optimizer wait a long time in case it retrieves some data from ConnectorMetadata
+    private boolean enableDynamicFiltering;
+    private int dynamicFilteringMaxPerDriverRowCount = 100;
+    private DataSize dynamicFilteringMaxPerDriverSize = new DataSize(10, KILOBYTE);
 
     private DataSize filterAndProjectMinOutputPageSize = new DataSize(500, KILOBYTE);
     private int filterAndProjectMinOutputPageRowCount = 256;
     private int maxGroupingSets = 2048;
     private boolean legacyUnnestArrayRows;
+    private AggregationPartitioningMergingStrategy aggregationPartitioningMergingStrategy = LEGACY;
 
     private boolean jsonSerdeCodeGenerationEnabled;
+    private int maxConcurrentMaterializations = 3;
+    private boolean optimizedRepartitioningEnabled;
+
+    private boolean pushdownSubfieldsEnabled;
+
+    private boolean tableWriterMergeOperatorEnabled = true;
+
+    private Duration indexLoaderTimeout = new Duration(20, SECONDS);
+
+    private boolean listBuiltInFunctionsOnly = true;
+    private boolean experimentalFunctionsEnabled;
+    private boolean useLegacyScheduler = true;
+    private boolean optimizeCommonSubExpressions = true;
+    private boolean preferDistributedUnion = true;
+    private boolean optimizeNullsInJoin;
+    private boolean pushdownDereferenceEnabled;
+    private boolean inlineSqlFunctions = true;
+
+    private String warnOnNoTableLayoutFilter = "";
+
+    private PartitioningPrecisionStrategy partitioningPrecisionStrategy = PartitioningPrecisionStrategy.AUTOMATIC;
+
+    public enum PartitioningPrecisionStrategy
+    {
+        // Let Presto decide when to repartition
+        AUTOMATIC,
+        // Use exact partitioning until Presto becomes smarter WRT to picking when to repartition
+        PREFER_EXACT_PARTITIONING
+    }
 
     public enum JoinReorderingStrategy
     {
@@ -158,6 +203,23 @@ public class FeaturesConfig
     {
         NONE,
         PUSH_THROUGH_LOW_MEMORY_OPERATORS
+    }
+
+    public enum AggregationPartitioningMergingStrategy
+    {
+        LEGACY, // merge partition preference with parent but apply current partition preference
+        TOP_DOWN, // merge partition preference with parent and apply the merged partition preference
+        BOTTOM_UP; // don't merge partition preference and apply current partition preference only
+
+        public boolean isMergingWithParent()
+        {
+            return this == LEGACY || this == TOP_DOWN;
+        }
+
+        public boolean isAdoptingMergedPreference()
+        {
+            return this == TOP_DOWN;
+        }
     }
 
     public double getCpuCostWeight()
@@ -230,6 +292,18 @@ public class FeaturesConfig
     public boolean isLegacyCharToVarcharCoercion()
     {
         return legacyCharToVarcharCoercion;
+    }
+
+    @Config("deprecated.legacy-date-timestamp-to-varchar-coercion")
+    public FeaturesConfig setLegacyDateTimestampToVarcharCoercion(boolean legacyDateTimestampToVarcharCoercion)
+    {
+        this.legacyDateTimestampToVarcharCoercion = legacyDateTimestampToVarcharCoercion;
+        return this;
+    }
+
+    public boolean isLegacyDateTimestampToVarcharCoercion()
+    {
+        return legacyDateTimestampToVarcharCoercion;
     }
 
     @Config("deprecated.legacy-array-agg")
@@ -322,10 +396,36 @@ public class FeaturesConfig
     }
 
     @Config("grouped-execution-for-aggregation-enabled")
-    @ConfigDescription("Experimental: Use grouped execution for aggregation when possible")
+    @ConfigDescription("Use grouped execution for aggregation when possible")
     public FeaturesConfig setGroupedExecutionForAggregationEnabled(boolean groupedExecutionForAggregationEnabled)
     {
         this.groupedExecutionForAggregationEnabled = groupedExecutionForAggregationEnabled;
+        return this;
+    }
+
+    public boolean isGroupedExecutionForJoinEnabled()
+    {
+        return groupedExecutionForJoinEnabled;
+    }
+
+    @Config("grouped-execution-for-join-enabled")
+    @ConfigDescription("Use grouped execution for join when possible")
+    public FeaturesConfig setGroupedExecutionForJoinEnabled(boolean groupedExecutionForJoinEnabled)
+    {
+        this.groupedExecutionForJoinEnabled = groupedExecutionForJoinEnabled;
+        return this;
+    }
+
+    public boolean isGroupedExecutionEnabled()
+    {
+        return groupedExecutionEnabled;
+    }
+
+    @Config("grouped-execution-enabled")
+    @ConfigDescription("Use grouped execution when possible")
+    public FeaturesConfig setGroupedExecutionEnabled(boolean groupedExecutionEnabled)
+    {
+        this.groupedExecutionEnabled = groupedExecutionEnabled;
         return this;
     }
 
@@ -339,6 +439,45 @@ public class FeaturesConfig
     public FeaturesConfig setDynamicScheduleForGroupedExecutionEnabled(boolean dynamicScheduleForGroupedExecution)
     {
         this.dynamicScheduleForGroupedExecution = dynamicScheduleForGroupedExecution;
+        return this;
+    }
+
+    public boolean isRecoverableGroupedExecutionEnabled()
+    {
+        return recoverableGroupedExecutionEnabled;
+    }
+
+    @Config("recoverable-grouped-execution-enabled")
+    @ConfigDescription("Use recoverable grouped execution when possible")
+    public FeaturesConfig setRecoverableGroupedExecutionEnabled(boolean recoverableGroupedExecutionEnabled)
+    {
+        this.recoverableGroupedExecutionEnabled = recoverableGroupedExecutionEnabled;
+        return this;
+    }
+
+    public double getMaxFailedTaskPercentage()
+    {
+        return maxFailedTaskPercentage;
+    }
+
+    @Config("max-failed-task-percentage")
+    @ConfigDescription("Max percentage of failed tasks that are retryable for recoverable dynamic scheduling")
+    public FeaturesConfig setMaxFailedTaskPercentage(double maxFailedTaskPercentage)
+    {
+        this.maxFailedTaskPercentage = maxFailedTaskPercentage;
+        return this;
+    }
+
+    public int getMaxStageRetries()
+    {
+        return maxStageRetries;
+    }
+
+    @Config("max-stage-retries")
+    @ConfigDescription("Maximum number of times that stages can be retried")
+    public FeaturesConfig setMaxStageRetries(int maxStageRetries)
+    {
+        this.maxStageRetries = maxStageRetries;
         return this;
     }
 
@@ -435,6 +574,18 @@ public class FeaturesConfig
         return this;
     }
 
+    public AggregationPartitioningMergingStrategy getAggregationPartitioningMergingStrategy()
+    {
+        return aggregationPartitioningMergingStrategy;
+    }
+
+    @Config("optimizer.aggregation-partition-merging")
+    public FeaturesConfig setAggregationPartitioningMergingStrategy(AggregationPartitioningMergingStrategy aggregationPartitioningMergingStrategy)
+    {
+        this.aggregationPartitioningMergingStrategy = requireNonNull(aggregationPartitioningMergingStrategy, "aggregationPartitioningMergingStrategy is null");
+        return this;
+    }
+
     public boolean isRedistributeWrites()
     {
         return redistributeWrites;
@@ -473,12 +624,25 @@ public class FeaturesConfig
         return this;
     }
 
+    public boolean isOptimizedScaleWriterProducerBuffer()
+    {
+        return optimizedScaleWriterProducerBuffer;
+    }
+
+    @Config("optimized-scale-writer-producer-buffer")
+    public FeaturesConfig setOptimizedScaleWriterProducerBuffer(boolean optimizedScaleWriterProducerBuffer)
+    {
+        this.optimizedScaleWriterProducerBuffer = optimizedScaleWriterProducerBuffer;
+        return this;
+    }
+
     public boolean isOptimizeMetadataQueries()
     {
         return optimizeMetadataQueries;
     }
 
     @Config("optimizer.optimize-metadata-queries")
+    @ConfigDescription("Enable optimization for metadata queries. Note if metadata entry has empty data, the result might be different (e.g. empty Hive partition)")
     public FeaturesConfig setOptimizeMetadataQueries(boolean optimizeMetadataQueries)
     {
         this.optimizeMetadataQueries = optimizeMetadataQueries;
@@ -619,6 +783,18 @@ public class FeaturesConfig
         return this;
     }
 
+    public boolean isRuntimeOptimizerEnabled()
+    {
+        return runtimeOptimizerEnabled;
+    }
+
+    @Config("experimental.runtime-optimizer-enabled")
+    public FeaturesConfig setRuntimeOptimizerEnabled(boolean value)
+    {
+        this.runtimeOptimizerEnabled = value;
+        return this;
+    }
+
     public Duration getIterativeOptimizerTimeout()
     {
         return iterativeOptimizerTimeout;
@@ -636,10 +812,22 @@ public class FeaturesConfig
         return enableStatsCalculator;
     }
 
+    public boolean isEnableStatsCollectionForTemporaryTable()
+    {
+        return enableStatsCollectionForTemporaryTable;
+    }
+
     @Config("experimental.enable-stats-calculator")
     public FeaturesConfig setEnableStatsCalculator(boolean enableStatsCalculator)
     {
         this.enableStatsCalculator = enableStatsCalculator;
+        return this;
+    }
+
+    @Config("experimental.enable-stats-collection-for-temporary-table")
+    public FeaturesConfig setEnableStatsCollectionForTemporaryTable(boolean enableStatsCollectionForTemporaryTable)
+    {
+        this.enableStatsCollectionForTemporaryTable = enableStatsCollectionForTemporaryTable;
         return this;
     }
 
@@ -763,6 +951,43 @@ public class FeaturesConfig
     public FeaturesConfig setSpillMaxUsedSpaceThreshold(double spillMaxUsedSpaceThreshold)
     {
         this.spillMaxUsedSpaceThreshold = spillMaxUsedSpaceThreshold;
+        return this;
+    }
+
+    public boolean isEnableDynamicFiltering()
+    {
+        return enableDynamicFiltering;
+    }
+
+    @Config("experimental.enable-dynamic-filtering")
+    public FeaturesConfig setEnableDynamicFiltering(boolean value)
+    {
+        this.enableDynamicFiltering = value;
+        return this;
+    }
+
+    public int getDynamicFilteringMaxPerDriverRowCount()
+    {
+        return dynamicFilteringMaxPerDriverRowCount;
+    }
+
+    @Config("experimental.dynamic-filtering-max-per-driver-row-count")
+    public FeaturesConfig setDynamicFilteringMaxPerDriverRowCount(int dynamicFilteringMaxPerDriverRowCount)
+    {
+        this.dynamicFilteringMaxPerDriverRowCount = dynamicFilteringMaxPerDriverRowCount;
+        return this;
+    }
+
+    @MaxDataSize("1MB")
+    public DataSize getDynamicFilteringMaxPerDriverSize()
+    {
+        return dynamicFilteringMaxPerDriverSize;
+    }
+
+    @Config("experimental.dynamic-filtering-max-per-driver-size")
+    public FeaturesConfig setDynamicFilteringMaxPerDriverSize(DataSize dynamicFilteringMaxPerDriverSize)
+    {
+        this.dynamicFilteringMaxPerDriverSize = dynamicFilteringMaxPerDriverSize;
         return this;
     }
 
@@ -971,5 +1196,206 @@ public class FeaturesConfig
     public boolean isPushLimitThroughOuterJoin()
     {
         return pushLimitThroughOuterJoin;
+    }
+
+    @Config("max-concurrent-materializations")
+    @Min(1)
+    @ConfigDescription("The maximum number of materializing plan sections that can run concurrently")
+    public FeaturesConfig setMaxConcurrentMaterializations(int maxConcurrentMaterializations)
+    {
+        this.maxConcurrentMaterializations = maxConcurrentMaterializations;
+        return this;
+    }
+
+    public int getMaxConcurrentMaterializations()
+    {
+        return maxConcurrentMaterializations;
+    }
+
+    @Config("experimental.pushdown-subfields-enabled")
+    @ConfigDescription("Experimental: enable subfield pruning")
+    public FeaturesConfig setPushdownSubfieldsEnabled(boolean pushdownSubfieldsEnabled)
+    {
+        this.pushdownSubfieldsEnabled = pushdownSubfieldsEnabled;
+        return this;
+    }
+
+    public boolean isPushdownSubfieldsEnabled()
+    {
+        return pushdownSubfieldsEnabled;
+    }
+
+    @Config("experimental.pushdown-dereference-enabled")
+    @ConfigDescription("Experimental: enable dereference pushdown")
+    public FeaturesConfig setPushdownDereferenceEnabled(boolean pushdownDereferenceEnabled)
+    {
+        this.pushdownDereferenceEnabled = pushdownDereferenceEnabled;
+        return this;
+    }
+
+    public boolean isPushdownDereferenceEnabled()
+    {
+        return pushdownDereferenceEnabled;
+    }
+
+    public boolean isTableWriterMergeOperatorEnabled()
+    {
+        return tableWriterMergeOperatorEnabled;
+    }
+
+    @Config("experimental.table-writer-merge-operator-enabled")
+    public FeaturesConfig setTableWriterMergeOperatorEnabled(boolean tableWriterMergeOperatorEnabled)
+    {
+        this.tableWriterMergeOperatorEnabled = tableWriterMergeOperatorEnabled;
+        return this;
+    }
+
+    @Config("optimizer.optimize-full-outer-join-with-coalesce")
+    public FeaturesConfig setOptimizeFullOuterJoinWithCoalesce(boolean optimizeFullOuterJoinWithCoalesce)
+    {
+        this.optimizeFullOuterJoinWithCoalesce = optimizeFullOuterJoinWithCoalesce;
+        return this;
+    }
+
+    public Boolean isOptimizeFullOuterJoinWithCoalesce()
+    {
+        return this.optimizeFullOuterJoinWithCoalesce;
+    }
+
+    @Config("index-loader-timeout")
+    @ConfigDescription("Time limit for loading indexes for index joins")
+    public FeaturesConfig setIndexLoaderTimeout(Duration indexLoaderTimeout)
+    {
+        this.indexLoaderTimeout = indexLoaderTimeout;
+        return this;
+    }
+
+    public Duration getIndexLoaderTimeout()
+    {
+        return this.indexLoaderTimeout;
+    }
+
+    public boolean isOptimizedRepartitioningEnabled()
+    {
+        return optimizedRepartitioningEnabled;
+    }
+
+    @Config("experimental.optimized-repartitioning")
+    @ConfigDescription("Experimental: Use optimized repartitioning")
+    public FeaturesConfig setOptimizedRepartitioningEnabled(boolean optimizedRepartitioningEnabled)
+    {
+        this.optimizedRepartitioningEnabled = optimizedRepartitioningEnabled;
+        return this;
+    }
+
+    public boolean isListBuiltInFunctionsOnly()
+    {
+        return listBuiltInFunctionsOnly;
+    }
+
+    @Config("list-built-in-functions-only")
+    public FeaturesConfig setListBuiltInFunctionsOnly(boolean listBuiltInFunctionsOnly)
+    {
+        this.listBuiltInFunctionsOnly = listBuiltInFunctionsOnly;
+        return this;
+    }
+
+    public PartitioningPrecisionStrategy getPartitioningPrecisionStrategy()
+    {
+        return partitioningPrecisionStrategy;
+    }
+
+    @Config("partitioning-precision-strategy")
+    @ConfigDescription("Set strategy used to determine whether to repartition (AUTOMATIC, PREFER_EXACT)")
+    public FeaturesConfig setPartitioningPrecisionStrategy(PartitioningPrecisionStrategy partitioningPrecisionStrategy)
+    {
+        this.partitioningPrecisionStrategy = partitioningPrecisionStrategy;
+        return this;
+    }
+
+    public boolean isExperimentalFunctionsEnabled()
+    {
+        return experimentalFunctionsEnabled;
+    }
+
+    @Config("experimental-functions-enabled")
+    public FeaturesConfig setExperimentalFunctionsEnabled(boolean experimentalFunctionsEnabled)
+    {
+        this.experimentalFunctionsEnabled = experimentalFunctionsEnabled;
+        return this;
+    }
+
+    public boolean isUseLegacyScheduler()
+    {
+        return useLegacyScheduler;
+    }
+
+    @Config("use-legacy-scheduler")
+    @ConfigDescription("Use the version of the scheduler before refactorings for section retries")
+    public FeaturesConfig setUseLegacyScheduler(boolean useLegacyScheduler)
+    {
+        this.useLegacyScheduler = useLegacyScheduler;
+        return this;
+    }
+
+    public boolean isOptimizeCommonSubExpressions()
+    {
+        return optimizeCommonSubExpressions;
+    }
+
+    @Config("optimize-common-sub-expressions")
+    @ConfigDescription("Extract and compute common sub expression in projections")
+    public FeaturesConfig setOptimizeCommonSubExpressions(boolean optimizeCommonSubExpressions)
+    {
+        this.optimizeCommonSubExpressions = optimizeCommonSubExpressions;
+        return this;
+    }
+
+    public boolean isPreferDistributedUnion()
+    {
+        return preferDistributedUnion;
+    }
+
+    @Config("prefer-distributed-union")
+    public FeaturesConfig setPreferDistributedUnion(boolean preferDistributedUnion)
+    {
+        this.preferDistributedUnion = preferDistributedUnion;
+        return this;
+    }
+
+    public boolean isOptimizeNullsInJoin()
+    {
+        return optimizeNullsInJoin;
+    }
+
+    @Config("optimize-nulls-in-join")
+    public FeaturesConfig setOptimizeNullsInJoin(boolean optimizeNullsInJoin)
+    {
+        this.optimizeNullsInJoin = optimizeNullsInJoin;
+        return this;
+    }
+
+    public String getWarnOnNoTableLayoutFilter()
+    {
+        return warnOnNoTableLayoutFilter;
+    }
+
+    @Config("warn-on-no-table-layout-filter")
+    public FeaturesConfig setWarnOnNoTableLayoutFilter(String warnOnNoTableLayoutFilter)
+    {
+        this.warnOnNoTableLayoutFilter = warnOnNoTableLayoutFilter;
+        return this;
+    }
+
+    public boolean isInlineSqlFunctions()
+    {
+        return inlineSqlFunctions;
+    }
+
+    @Config("inline-sql-functions")
+    public FeaturesConfig setInlineSqlFunctions(boolean inlineSqlFunctions)
+    {
+        this.inlineSqlFunctions = inlineSqlFunctions;
+        return this;
     }
 }

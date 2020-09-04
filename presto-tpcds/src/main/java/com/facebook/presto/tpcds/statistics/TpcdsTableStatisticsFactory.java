@@ -14,45 +14,46 @@
 
 package com.facebook.presto.tpcds.statistics;
 
+import com.facebook.presto.common.type.CharType;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Decimals;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.statistics.ColumnStatistics;
 import com.facebook.presto.spi.statistics.DoubleRange;
 import com.facebook.presto.spi.statistics.Estimate;
 import com.facebook.presto.spi.statistics.TableStatistics;
-import com.facebook.presto.spi.type.CharType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.Decimals;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.tpcds.TpcdsColumnHandle;
 import com.teradata.tpcds.Table;
 import io.airlift.slice.Slice;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.Decimals.isLongDecimal;
-import static com.facebook.presto.spi.type.Decimals.isShortDecimal;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.TimeType.TIME;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.Decimals.isLongDecimal;
+import static com.facebook.presto.common.type.Decimals.isShortDecimal;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.TimeType.TIME;
 import static java.lang.Double.parseDouble;
 
 public class TpcdsTableStatisticsFactory
 {
     private final TableStatisticsDataRepository statisticsDataRepository = new TableStatisticsDataRepository();
 
-    public TableStatistics create(String schemaName, Table table, Map<String, ColumnHandle> columnHandles)
+    public TableStatistics create(String schemaName, Table table, List<ColumnHandle> columnHandles)
     {
         Optional<TableStatisticsData> statisticsDataOptional = statisticsDataRepository.load(schemaName, table);
         return statisticsDataOptional.map(statisticsData -> toTableStatistics(columnHandles, statisticsData))
                 .orElse(TableStatistics.empty());
     }
 
-    private TableStatistics toTableStatistics(Map<String, ColumnHandle> columnHandles, TableStatisticsData statisticsData)
+    private TableStatistics toTableStatistics(List<ColumnHandle> columnHandles, TableStatisticsData statisticsData)
     {
         long rowCount = statisticsData.getRowCount();
         TableStatistics.Builder tableStatistics = TableStatistics.builder()
@@ -60,9 +61,9 @@ public class TpcdsTableStatisticsFactory
 
         if (rowCount > 0) {
             Map<String, ColumnStatisticsData> columnsData = statisticsData.getColumns();
-            for (Map.Entry<String, ColumnHandle> entry : columnHandles.entrySet()) {
-                TpcdsColumnHandle columnHandle = (TpcdsColumnHandle) entry.getValue();
-                tableStatistics.setColumnStatistics(entry.getValue(), toColumnStatistics(columnsData.get(entry.getKey()), columnHandle.getType(), rowCount));
+            for (ColumnHandle handle : columnHandles) {
+                TpcdsColumnHandle columnHandle = (TpcdsColumnHandle) handle;
+                tableStatistics.setColumnStatistics(columnHandle, toColumnStatistics(columnsData.get(columnHandle.getColumnName()), columnHandle.getType(), rowCount));
             }
         }
 

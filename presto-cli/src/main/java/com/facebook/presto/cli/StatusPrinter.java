@@ -13,13 +13,13 @@
  */
 package com.facebook.presto.cli;
 
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.client.QueryStatusInfo;
 import com.facebook.presto.client.StageStats;
 import com.facebook.presto.client.StatementClient;
 import com.facebook.presto.client.StatementStats;
 import com.google.common.base.Strings;
 import com.google.common.primitives.Ints;
-import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 
@@ -204,8 +204,12 @@ Spilled: 20GB
             // Parallelism: 5.3
             out.println(format("Parallelism: %.1f", parallelism));
 
-            // Peak Memory: 1.97GB
-            reprintLine("Peak Memory: " + formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
+            // Peak User Memory: 1.97GB
+            reprintLine("Peak User Memory: " + formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
+            // Peak Total Memory: 1.98GB
+            reprintLine("Peak Total Memory: " + formatDataSize(bytes(stats.getPeakTotalMemoryBytes()), true));
+            // Peak Task Total Memory: 1.99GB
+            reprintLine("Peak Task Total Memory: " + formatDataSize(bytes(stats.getPeakTaskTotalMemoryBytes()), true));
 
             // Spilled Data: 20GB
             if (stats.getSpilledBytes() > 0) {
@@ -302,6 +306,10 @@ Spilled: 20GB
 
                 // Peak Memory: 1.97GB
                 reprintLine("Peak Memory: " + formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
+                // Peak Total Memory: 1.98GB
+                reprintLine("Peak Total Memory: " + formatDataSize(bytes(stats.getPeakTotalMemoryBytes()), true));
+                // Peak Task Total Memory: 1.99GB
+                reprintLine("Peak Task Total Memory: " + formatDataSize(bytes(stats.getPeakTaskTotalMemoryBytes()), true));
 
                 // Spilled Data: 20GB
                 if (stats.getSpilledBytes() > 0) {
@@ -311,6 +319,11 @@ Spilled: 20GB
 
             verify(terminalWidth >= 75); // otherwise handled above
             int progressWidth = (min(terminalWidth, 100) - 75) + 17; // progress bar is 17-42 characters wide
+            String formattedWallTime = formatTime(wallTime);
+            if (formattedWallTime.length() > 5) {
+                // fix overflowed progress bar for queries running over 100 minutes
+                progressWidth -= formattedWallTime.length() - 5;
+            }
 
             if (stats.isScheduled()) {
                 String progressBar = formatProgressBar(progressWidth,
@@ -320,7 +333,7 @@ Spilled: 20GB
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [=====>>                                   ] 10%
                 String progressLine = format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s] %d%%",
-                        formatTime(wallTime),
+                        formattedWallTime,
                         formatCount(stats.getProcessedRows()),
                         formatDataSize(bytes(stats.getProcessedBytes()), true),
                         formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -335,7 +348,7 @@ Spilled: 20GB
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [    <=>                                  ]
                 String progressLine = format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s]",
-                        formatTime(wallTime),
+                        formattedWallTime,
                         formatCount(stats.getProcessedRows()),
                         formatDataSize(bytes(stats.getProcessedBytes()), true),
                         formatCountRate(stats.getProcessedRows(), wallTime, false),

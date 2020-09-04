@@ -52,7 +52,7 @@ public class SpatialJoinStatsRule
                     return Optional.of(statsCalculator.filterStats(crossJoinStats, castToExpression(node.getFilter()), session, types));
                 }
                 else {
-                    return Optional.of(statsCalculator.filterStats(crossJoinStats, node.getFilter(), session, types));
+                    return Optional.of(statsCalculator.filterStats(crossJoinStats, node.getFilter(), session));
                 }
             case LEFT:
                 return Optional.of(PlanNodeStatsEstimate.unknown());
@@ -66,8 +66,8 @@ public class SpatialJoinStatsRule
         PlanNodeStatsEstimate.Builder builder = PlanNodeStatsEstimate.builder()
                 .setOutputRowCount(leftStats.getOutputRowCount() * rightStats.getOutputRowCount());
 
-        node.getLeft().getOutputSymbols().forEach(symbol -> builder.addSymbolStatistics(symbol, leftStats.getSymbolStatistics(symbol)));
-        node.getRight().getOutputSymbols().forEach(symbol -> builder.addSymbolStatistics(symbol, rightStats.getSymbolStatistics(symbol)));
+        node.getLeft().getOutputVariables().forEach(variable -> builder.addVariableStatistics(variable, leftStats.getVariableStatistics(variable)));
+        node.getRight().getOutputVariables().forEach(variable -> builder.addVariableStatistics(variable, rightStats.getVariableStatistics(variable)));
 
         return builder.build();
     }

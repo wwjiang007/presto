@@ -15,9 +15,9 @@ package com.facebook.presto.cost;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.matching.Pattern;
+import com.facebook.presto.spi.plan.FilterNode;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.iterative.Lookup;
-import com.facebook.presto.sql.planner.plan.FilterNode;
 
 import java.util.Optional;
 
@@ -55,7 +55,7 @@ public class FilterStatsRule
             estimate = filterStatsCalculator.filterStats(sourceStats, castToExpression(node.getPredicate()), session, types);
         }
         else {
-            estimate = filterStatsCalculator.filterStats(sourceStats, node.getPredicate(), session, types);
+            estimate = filterStatsCalculator.filterStats(sourceStats, node.getPredicate(), session);
         }
         if (isDefaultFilterFactorEnabled(session) && estimate.isOutputRowCountUnknown()) {
             estimate = sourceStats.mapOutputRowCount(sourceRowCount -> sourceStats.getOutputRowCount() * UNKNOWN_FILTER_COEFFICIENT);

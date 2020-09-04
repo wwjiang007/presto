@@ -51,12 +51,12 @@ public class TestQueryStateInfo
         root.setHardConcurrencyLimit(0);
         root.setSchedulingPolicy(WEIGHTED);
 
-        InternalResourceGroup rootA = root.getOrCreateSubGroup("a");
+        InternalResourceGroup rootA = root.getOrCreateSubGroup("a", true);
         rootA.setSoftMemoryLimit(new DataSize(1, MEGABYTE));
         rootA.setMaxQueuedQueries(20);
         rootA.setHardConcurrencyLimit(0);
 
-        InternalResourceGroup rootAX = rootA.getOrCreateSubGroup("x");
+        InternalResourceGroup rootAX = rootA.getOrCreateSubGroup("x", true);
         rootAX.setSoftMemoryLimit(new DataSize(1, MEGABYTE));
         rootAX.setMaxQueuedQueries(10);
         rootAX.setHardConcurrencyLimit(0);
@@ -110,6 +110,7 @@ public class TestQueryStateInfo
                         Duration.valueOf("8m"),
                         Duration.valueOf("7m"),
                         Duration.valueOf("34m"),
+                        Duration.valueOf("35m"),
                         Duration.valueOf("44m"),
                         Duration.valueOf("9m"),
                         Duration.valueOf("10m"),
@@ -117,6 +118,7 @@ public class TestQueryStateInfo
                         13,
                         14,
                         15,
+                        16,
                         100,
                         17,
                         18,
@@ -132,9 +134,11 @@ public class TestQueryStateInfo
                         true,
                         Duration.valueOf("23m"),
                         Duration.valueOf("24m"),
+                        Duration.valueOf("0m"),
                         Duration.valueOf("26m"),
                         true,
                         ImmutableSet.of(WAITING_FOR_MEMORY),
+                        DataSize.valueOf("123MB"),
                         DataSize.valueOf("27GB"),
                         28,
                         DataSize.valueOf("29GB"),
@@ -147,7 +151,6 @@ public class TestQueryStateInfo
                         DataSize.valueOf("36GB"),
                         ImmutableList.of(),
                         ImmutableList.of()),
-                Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 ImmutableMap.of(),
@@ -165,6 +168,8 @@ public class TestQueryStateInfo
                 ImmutableSet.of(),
                 Optional.empty(),
                 false,
+                Optional.empty(),
+                Optional.empty(),
                 Optional.empty(),
                 Optional.empty());
     }

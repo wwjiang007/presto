@@ -13,12 +13,10 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.common.type.DateType;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
-import com.facebook.presto.sql.planner.plan.Assignments;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.InListExpression;
 import com.facebook.presto.sql.tree.InPredicate;
@@ -29,13 +27,14 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.apply;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.filter;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.functionCall;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
+import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.assignment;
 import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToRowExpression;
 
 public class TestExpressionRewriteRuleSet
@@ -59,8 +58,8 @@ public class TestExpressionRewriteRuleSet
     {
         tester().assertThat(zeroRewriter.projectExpressionRewrite())
                 .on(p -> p.project(
-                        Assignments.of(p.symbol("y"), PlanBuilder.expression("x IS NOT NULL")),
-                        p.values(p.symbol("x"))))
+                        assignment(p.variable("y"), PlanBuilder.expression("x IS NOT NULL")),
+                        p.values(p.variable("x"))))
                 .matches(
                         project(ImmutableMap.of("y", expression("0")), values("x")));
     }
@@ -70,8 +69,8 @@ public class TestExpressionRewriteRuleSet
     {
         tester().assertThat(zeroRewriter.projectExpressionRewrite())
                 .on(p -> p.project(
-                        Assignments.of(p.symbol("y"), PlanBuilder.expression("0")),
-                        p.values(p.symbol("x"))))
+                        assignment(p.variable("y"), PlanBuilder.expression("0")),
+                        p.values(p.variable("x"))))
                 .doesNotFire();
     }
 
@@ -82,11 +81,11 @@ public class TestExpressionRewriteRuleSet
                 .on(p -> p.aggregation(a -> a
                         .globalGrouping()
                         .addAggregation(
-                                p.symbol("count_1", BIGINT),
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(p.symbol("y", BIGINT).toSymbolReference())),
+                                p.variable("count_1", BIGINT),
+                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new SymbolReference("y"))),
                                 ImmutableList.of(BIGINT))
                         .source(
-                                p.values(p.symbol("x", BIGINT)))))
+                                p.values(p.variable("x", BIGINT)))))
                 .matches(
                         PlanMatchPattern.aggregation(
                                 ImmutableMap.of("count_1", functionCall("count", ImmutableList.of("x"))),
@@ -101,7 +100,7 @@ public class TestExpressionRewriteRuleSet
                 .on(p -> p.aggregation(a -> a
                         .globalGrouping()
                         .addAggregation(
-                                p.symbol("count_1", DateType.DATE),
+                                p.variable("count_1", DateType.DATE),
                                 nowCall,
                                 ImmutableList.of())
                         .source(
@@ -112,7 +111,7 @@ public class TestExpressionRewriteRuleSet
                 .on(p -> p.aggregation(a -> a
                         .globalGrouping()
                         .addAggregation(
-                                p.symbol("count_1", BIGINT),
+                                p.variable("count_1", BIGINT),
                                 new FunctionCall(QualifiedName.of("count"), ImmutableList.of()),
                                 ImmutableList.of(BIGINT))
                         .source(
@@ -142,7 +141,7 @@ public class TestExpressionRewriteRuleSet
     {
         tester().assertThat(zeroRewriter.valuesExpressionRewrite())
                 .on(p -> p.values(
-                        ImmutableList.<Symbol>of(p.symbol("a")),
+                        ImmutableList.of(p.variable("a")),
                         ImmutableList.of((ImmutableList.of(castToRowExpression(PlanBuilder.expression("1")))))))
                 .matches(
                         values(ImmutableList.of("a"), ImmutableList.of(ImmutableList.of(new LongLiteral("0")))));
@@ -153,7 +152,7 @@ public class TestExpressionRewriteRuleSet
     {
         tester().assertThat(zeroRewriter.valuesExpressionRewrite())
                 .on(p -> p.values(
-                        ImmutableList.<Symbol>of(p.symbol("a")),
+                        ImmutableList.of(p.variable("a")),
                         ImmutableList.of((ImmutableList.of(castToRowExpression(PlanBuilder.expression("0")))))))
                 .doesNotFire();
     }
@@ -163,8 +162,8 @@ public class TestExpressionRewriteRuleSet
     {
         tester().assertThat(applyRewriter.applyExpressionRewrite())
                 .on(p -> p.apply(
-                        Assignments.of(
-                                p.symbol("a", BIGINT),
+                        assignment(
+                                p.variable("a", BIGINT),
                                 new InPredicate(
                                         new LongLiteral("1"),
                                         new InListExpression(ImmutableList.of(
@@ -186,8 +185,8 @@ public class TestExpressionRewriteRuleSet
     {
         tester().assertThat(applyRewriter.applyExpressionRewrite())
                 .on(p -> p.apply(
-                        Assignments.of(
-                                p.symbol("a", BIGINT),
+                        assignment(
+                                p.variable("a", BIGINT),
                                 new InPredicate(
                                         new LongLiteral("0"),
                                         new InListExpression(ImmutableList.of(

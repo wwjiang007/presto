@@ -14,12 +14,12 @@
 package com.facebook.presto.accumulo.serializers;
 
 import com.facebook.presto.block.BlockEncodingManager;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.StandardTypes;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.common.type.TypeSignatureParameter;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.StandardTypes;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignatureParameter;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
@@ -27,30 +27,30 @@ import com.google.common.collect.ImmutableMap;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Mutation;
 import org.apache.accumulo.core.data.Value;
-import org.joda.time.DateTime;
-import org.joda.time.DateTimeZone;
 import org.testng.annotations.Test;
 
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TimeType.TIME;
-import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TimeType.TIME;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.testng.Assert.assertEquals;
@@ -108,7 +108,7 @@ public abstract class AbstractTestAccumuloRowSerializer
     public void testDate()
             throws Exception
     {
-        Date expected = new Date(new DateTime(2001, 2, 3, 4, 5, 6, DateTimeZone.UTC).getMillis());
+        Date expected = new Date(ZonedDateTime.of(2001, 2, 3, 4, 5, 6, 0, ZoneId.of("UTC")).toEpochSecond());
         AccumuloRowSerializer serializer = serializerClass.getConstructor().newInstance();
         byte[] data = serializer.encode(DATE, expected);
 

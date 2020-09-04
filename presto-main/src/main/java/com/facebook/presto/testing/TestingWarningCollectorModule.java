@@ -20,7 +20,7 @@ import com.google.inject.Module;
 import com.google.inject.Provides;
 import com.google.inject.Singleton;
 
-import static io.airlift.configuration.ConfigBinder.configBinder;
+import static com.facebook.airlift.configuration.ConfigBinder.configBinder;
 import static java.util.Objects.requireNonNull;
 
 public class TestingWarningCollectorModule
@@ -39,6 +39,6 @@ public class TestingWarningCollectorModule
     {
         requireNonNull(config, "config is null");
         requireNonNull(testConfig, "testConfig is null");
-        return () -> new TestingWarningCollector(config, testConfig);
+        return (warningHandlingLevel) -> new TestingWarningCollector(config, testConfig);
     }
 }

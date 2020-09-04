@@ -15,20 +15,22 @@ package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.warnings.DefaultWarningCollector;
-import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.execution.warnings.WarningCollectorConfig;
+import com.facebook.presto.execution.warnings.WarningHandlingLevel;
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
 import com.facebook.presto.spi.PrestoWarning;
 import com.facebook.presto.spi.WarningCode;
+import com.facebook.presto.spi.WarningCollector;
+import com.facebook.presto.spi.plan.ProjectNode;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.planner.LogicalPlanner;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.RuleStatsRecorder;
 import com.facebook.presto.sql.planner.iterative.IterativeOptimizer;
 import com.facebook.presto.sql.planner.iterative.Rule;
+import com.facebook.presto.sql.planner.iterative.rule.TranslateExpressions;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
-import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.tpch.TpchConnectorFactory;
 import com.google.common.collect.ImmutableList;
@@ -44,6 +46,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.spi.plan.ProjectNode.Locality.LOCAL;
+import static com.facebook.presto.spi.plan.ProjectNode.Locality.UNKNOWN;
 import static com.facebook.presto.sql.planner.plan.Patterns.project;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -84,7 +88,7 @@ public class TestPlannerWarnings
         List<WarningCode> warningCodes = warnings.stream()
                 .map(PrestoWarning::getWarningCode)
                 .collect(toImmutableList());
-        assertPlannerWarnings(queryRunner, "SELECT * FROM NATION", ImmutableMap.of(), warningCodes, Optional.of(ImmutableList.of(new TestWarningsRule(warnings))));
+        assertPlannerWarnings(queryRunner, "SELECT * FROM NATION", ImmutableMap.of(), warningCodes, Optional.of(ImmutableList.of(new TestWarningsRule(warnings), new PassRemoteProjectSanityChecker())));
     }
 
     public static void assertPlannerWarnings(LocalQueryRunner queryRunner, @Language("SQL") String sql, Map<String, String> sessionProperties, List<WarningCode> expectedWarnings, Optional<List<Rule<?>>> rules)
@@ -93,7 +97,7 @@ public class TestPlannerWarnings
                 .setCatalog(queryRunner.getDefaultSession().getCatalog().get())
                 .setSchema(queryRunner.getDefaultSession().getSchema().get());
         sessionProperties.forEach(sessionBuilder::setSystemProperty);
-        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig());
+        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig(), WarningHandlingLevel.NORMAL);
         try {
             queryRunner.inTransaction(sessionBuilder.build(), transactionSession -> {
                 if (rules.isPresent()) {
@@ -127,7 +131,14 @@ public class TestPlannerWarnings
                 queryRunner.getCostCalculator(),
                 ImmutableSet.copyOf(rules));
 
-        return queryRunner.createPlan(session, sql, ImmutableList.of(optimizer), LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED, warningCollector);
+        // Translate all OriginalExpression in planNodes to RowExpression so that we can do plan pattern asserting and printing on RowExpression only.
+        PlanOptimizer expressionTranslator = new IterativeOptimizer(
+                new RuleStatsRecorder(),
+                queryRunner.getStatsCalculator(),
+                queryRunner.getCostCalculator(),
+                ImmutableSet.copyOf(new TranslateExpressions(queryRunner.getMetadata(), queryRunner.getSqlParser()).rules()));
+
+        return queryRunner.createPlan(session, sql, ImmutableList.of(optimizer, expressionTranslator), LogicalPlanner.Stage.OPTIMIZED_AND_VALIDATED, warningCollector);
     }
 
     public static List<PrestoWarning> createTestWarnings(int numberOfWarnings)
@@ -161,6 +172,25 @@ public class TestPlannerWarnings
         {
             warnings.stream()
                     .forEach(context.getWarningCollector()::add);
+            return Result.empty();
+        }
+    }
+
+    public static class PassRemoteProjectSanityChecker
+            implements Rule<ProjectNode>
+    {
+        @Override
+        public Pattern<ProjectNode> getPattern()
+        {
+            return project();
+        }
+
+        @Override
+        public Result apply(ProjectNode node, Captures captures, Context context)
+        {
+            if (node.getLocality().equals(UNKNOWN)) {
+                return Result.ofPlanNode(new ProjectNode(context.getIdAllocator().getNextId(), node.getSource(), node.getAssignments(), LOCAL));
+            }
             return Result.empty();
         }
     }

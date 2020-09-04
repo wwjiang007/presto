@@ -14,19 +14,19 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.block.BlockEncodingManager;
+import com.facebook.presto.common.block.LongArrayBlockBuilder;
+import com.facebook.presto.common.function.OperatorType;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Decimals;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.CastType;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.spi.block.LongArrayBlockBuilder;
-import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.SpecialFormExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.Decimals;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.planner.planPrinter.RowExpressionFormatter;
 import com.facebook.presto.type.TypeRegistry;
@@ -37,43 +37,45 @@ import io.airlift.slice.Slices;
 import org.testng.annotations.Test;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.spi.function.OperatorType.ADD;
-import static com.facebook.presto.spi.function.OperatorType.BETWEEN;
-import static com.facebook.presto.spi.function.OperatorType.CAST;
-import static com.facebook.presto.spi.function.OperatorType.DIVIDE;
-import static com.facebook.presto.spi.function.OperatorType.EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN;
-import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN_OR_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.HASH_CODE;
-import static com.facebook.presto.spi.function.OperatorType.IS_DISTINCT_FROM;
-import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
-import static com.facebook.presto.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.MODULUS;
-import static com.facebook.presto.spi.function.OperatorType.MULTIPLY;
-import static com.facebook.presto.spi.function.OperatorType.NEGATION;
-import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.SUBSCRIPT;
-import static com.facebook.presto.spi.function.OperatorType.SUBTRACT;
+import static com.facebook.presto.common.function.OperatorType.ADD;
+import static com.facebook.presto.common.function.OperatorType.BETWEEN;
+import static com.facebook.presto.common.function.OperatorType.CAST;
+import static com.facebook.presto.common.function.OperatorType.DIVIDE;
+import static com.facebook.presto.common.function.OperatorType.EQUAL;
+import static com.facebook.presto.common.function.OperatorType.GREATER_THAN;
+import static com.facebook.presto.common.function.OperatorType.GREATER_THAN_OR_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.HASH_CODE;
+import static com.facebook.presto.common.function.OperatorType.IS_DISTINCT_FROM;
+import static com.facebook.presto.common.function.OperatorType.LESS_THAN;
+import static com.facebook.presto.common.function.OperatorType.LESS_THAN_OR_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.MODULUS;
+import static com.facebook.presto.common.function.OperatorType.MULTIPLY;
+import static com.facebook.presto.common.function.OperatorType.NEGATION;
+import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.SUBSCRIPT;
+import static com.facebook.presto.common.function.OperatorType.SUBTRACT;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.CharType.createCharType;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.AND;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IS_NULL;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.OR;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.CharType.createCharType;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.constantNull;
 import static com.facebook.presto.type.ColorType.COLOR;
+import static com.facebook.presto.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
+import static com.facebook.presto.type.IntervalYearMonthType.INTERVAL_YEAR_MONTH;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static java.lang.Float.floatToIntBits;
 import static org.testng.Assert.assertEquals;
@@ -82,7 +84,7 @@ public class TestRowExpressionFormatter
 {
     private static final TypeManager typeManager = new TypeRegistry();
     private static final FunctionManager functionManager = new FunctionManager(typeManager, new BlockEncodingManager(typeManager), new FeaturesConfig());
-    private static final RowExpressionFormatter FORMATTER = new RowExpressionFormatter(TEST_SESSION.toConnectorSession(), functionManager);
+    private static final RowExpressionFormatter FORMATTER = new RowExpressionFormatter(functionManager);
     private static final VariableReferenceExpression C_BIGINT = new VariableReferenceExpression("c_bigint", BIGINT);
     private static final VariableReferenceExpression C_BIGINT_ARRAY = new VariableReferenceExpression("c_bigint_array", new ArrayType(BIGINT));
 
@@ -135,7 +137,7 @@ public class TestRowExpressionFormatter
         assertEquals(format(constantExpression), "VARBINARY 12 34 56");
 
         // color
-        constantExpression = constant(256, COLOR);
+        constantExpression = constant(256L, COLOR);
         assertEquals(format(constantExpression), "COLOR 256");
 
         // long and short decimals
@@ -149,6 +151,12 @@ public class TestRowExpressionFormatter
         assertEquals(format(constantExpression), "TIMESTAMP 1991-01-01 00:00:00.000");
         constantExpression = constant(7670L, DATE);
         assertEquals(format(constantExpression), "DATE 1991-01-01");
+
+        // interval
+        constantExpression = constant(24L, INTERVAL_DAY_TIME);
+        assertEquals(format(constantExpression), "INTERVAL DAY TO SECOND 0 00:00:00.024");
+        constantExpression = constant(25L, INTERVAL_YEAR_MONTH);
+        assertEquals(format(constantExpression), "INTERVAL YEAR TO MONTH 2-1");
 
         // block
         constantExpression = constant(new LongArrayBlockBuilder(null, 4).writeLong(1L).writeLong(2).build(), new ArrayType(BIGINT));
@@ -203,7 +211,7 @@ public class TestRowExpressionFormatter
         RowExpression subscriptExpression = call(SUBSCRIPT.name(),
                 functionManager.resolveOperator(SUBSCRIPT, fromTypes(arrayType, elementType)),
                 elementType,
-                ImmutableList.of(C_BIGINT_ARRAY, constant(0, INTEGER)));
+                ImmutableList.of(C_BIGINT_ARRAY, constant(0L, INTEGER)));
         callExpression = subscriptExpression;
         assertEquals(format(callExpression), "c_bigint_array[INTEGER 0]");
 
@@ -212,7 +220,7 @@ public class TestRowExpressionFormatter
             CAST.name(),
             functionManager.lookupCast(CastType.CAST, TINYINT.getTypeSignature(), BIGINT.getTypeSignature()),
             BIGINT,
-            constant(1, TINYINT));
+            constant(1L, TINYINT));
         assertEquals(format(callExpression), "CAST(TINYINT 1 AS bigint)");
 
         // between
@@ -221,8 +229,8 @@ public class TestRowExpressionFormatter
                 functionManager.resolveOperator(BETWEEN, fromTypes(BIGINT, BIGINT, BIGINT)),
                 BOOLEAN,
                 subscriptExpression,
-                constant(1, BIGINT),
-                constant(5, BIGINT));
+                constant(1L, BIGINT),
+                constant(5L, BIGINT));
         assertEquals(format(callExpression), "c_bigint_array[INTEGER 0] BETWEEN (BIGINT 1) AND (BIGINT 5)");
 
         // other
@@ -230,7 +238,7 @@ public class TestRowExpressionFormatter
                 HASH_CODE.name(),
                 functionManager.resolveOperator(HASH_CODE, fromTypes(BIGINT)),
                 BIGINT,
-                constant(1, BIGINT));
+                constant(1L, BIGINT));
         assertEquals(format(callExpression), "HASH_CODE(BIGINT 1)");
     }
 
@@ -280,7 +288,7 @@ public class TestRowExpressionFormatter
         expression1 = call(SUBSCRIPT.name(),
                 functionManager.resolveOperator(SUBSCRIPT, fromTypes(arrayType, elementType)),
                 elementType,
-                ImmutableList.of(C_BIGINT_ARRAY, constant(5, INTEGER)));
+                ImmutableList.of(C_BIGINT_ARRAY, constant(5L, INTEGER)));
         expression2 = call(
                 NEGATION.name(),
                 functionManager.resolveOperator(NEGATION, fromTypes(expression1.getType())),
@@ -312,6 +320,6 @@ public class TestRowExpressionFormatter
 
     private static String format(RowExpression expression)
     {
-        return FORMATTER.formatRowExpression(expression);
+        return FORMATTER.formatRowExpression(TEST_SESSION.toConnectorSession(), expression);
     }
 }

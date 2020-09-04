@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.plugin.geospatial;
 
+import com.facebook.presto.common.type.KdbTreeType;
 import com.facebook.presto.geospatial.KdbTreeUtils;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.function.LiteralParameters;
@@ -20,8 +21,8 @@ import com.facebook.presto.spi.function.ScalarOperator;
 import com.facebook.presto.spi.function.SqlType;
 import io.airlift.slice.Slice;
 
+import static com.facebook.presto.common.function.OperatorType.CAST;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
-import static com.facebook.presto.spi.function.OperatorType.CAST;
 
 public final class KdbTreeCasts
 {

@@ -28,6 +28,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException;
 import org.jdbi.v3.core.statement.UnableToExecuteStatementException;
 import org.testng.annotations.Test;
 
@@ -54,7 +55,7 @@ import static org.testng.Assert.fail;
 public class TestDbResourceGroupConfigurationManager
 {
     private static final String ENVIRONMENT = "test";
-    private static final ResourceEstimates EMPTY_RESOURCE_ESTIMATES = new ResourceEstimates(Optional.empty(), Optional.empty(), Optional.empty());
+    private static final ResourceEstimates EMPTY_RESOURCE_ESTIMATES = new ResourceEstimates(Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
 
     static H2DaoProvider setup(String prefix)
     {
@@ -121,7 +122,7 @@ public class TestDbResourceGroupConfigurationManager
         manager.configure(global, new SelectionContext<>(global.getId(), new VariableMap(ImmutableMap.of("USER", "user"))));
         assertEqualsResourceGroup(global, "1MB", 1000, 100, 100, WEIGHTED, DEFAULT_WEIGHT, true, new Duration(1, HOURS), new Duration(1, DAYS));
         exported.set(false);
-        InternalResourceGroup sub = global.getOrCreateSubGroup("sub");
+        InternalResourceGroup sub = global.getOrCreateSubGroup("sub", true);
         manager.configure(sub, new SelectionContext<>(sub.getId(), new VariableMap(ImmutableMap.of("USER", "user"))));
         assertEqualsResourceGroup(sub, "2MB", 4, 3, 3, FAIR, 5, false, new Duration(Long.MAX_VALUE, MILLISECONDS), new Duration(Long.MAX_VALUE, MILLISECONDS));
     }
@@ -141,7 +142,7 @@ public class TestDbResourceGroupConfigurationManager
         }
         catch (RuntimeException ex) {
             assertTrue(ex instanceof UnableToExecuteStatementException);
-            assertTrue(ex.getCause() instanceof org.h2.jdbc.JdbcSQLException);
+            assertTrue(ex.getCause() instanceof JdbcSQLIntegrityConstraintViolationException);
             assertTrue(ex.getCause().getMessage().startsWith("Unique index or primary key violation"));
         }
         dao.insertSelector(1, 1, null, null, null, null, null);
@@ -157,7 +158,7 @@ public class TestDbResourceGroupConfigurationManager
         }
         catch (RuntimeException ex) {
             assertTrue(ex instanceof UnableToExecuteStatementException);
-            assertTrue(ex.getCause() instanceof org.h2.jdbc.JdbcSQLException);
+            assertTrue(ex.getCause() instanceof JdbcSQLIntegrityConstraintViolationException);
             assertTrue(ex.getCause().getMessage().startsWith("Unique index or primary key violation"));
         }
 
@@ -199,7 +200,7 @@ public class TestDbResourceGroupConfigurationManager
         AtomicBoolean exported = new AtomicBoolean();
         InternalResourceGroup global = new InternalResourceGroup.RootInternalResourceGroup("global", (group, export) -> exported.set(export), directExecutor());
         manager.configure(global, new SelectionContext<>(global.getId(), new VariableMap(ImmutableMap.of("USER", "user"))));
-        InternalResourceGroup globalSub = global.getOrCreateSubGroup("sub");
+        InternalResourceGroup globalSub = global.getOrCreateSubGroup("sub", true);
         manager.configure(globalSub, new SelectionContext<>(globalSub.getId(), new VariableMap(ImmutableMap.of("USER", "user"))));
         // Verify record exists
         assertEqualsResourceGroup(globalSub, "2MB", 4, 3, 3, FAIR, 5, false, new Duration(Long.MAX_VALUE, MILLISECONDS), new Duration(Long.MAX_VALUE, MILLISECONDS));
@@ -329,7 +330,7 @@ public class TestDbResourceGroupConfigurationManager
             fail("Expected unavailable configuration exception");
         }
         catch (Exception e) {
-            assertEquals(e.getMessage(), "Selectors cannot be fetched from database");
+            assertTrue(e.getMessage().startsWith("Resource group configuration cannot be fetched from database."));
         }
 
         try {
@@ -337,7 +338,7 @@ public class TestDbResourceGroupConfigurationManager
             fail("Expected unavailable configuration exception");
         }
         catch (Exception e) {
-            assertEquals(e.getMessage(), "Root groups cannot be fetched from database");
+            assertTrue(e.getMessage().startsWith("Resource group configuration cannot be fetched from database."));
         }
 
         manager.destroy();

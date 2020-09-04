@@ -13,15 +13,15 @@
  */
 package com.facebook.presto.resourceGroups.db;
 
+import com.facebook.airlift.json.JsonCodec;
 import com.facebook.presto.resourceGroups.ResourceGroupNameTemplate;
 import com.facebook.presto.resourceGroups.SelectorResourceEstimate;
 import com.facebook.presto.resourceGroups.SelectorResourceEstimate.Range;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.google.common.collect.ImmutableList;
-import io.airlift.json.JsonCodec;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import org.h2.jdbc.JdbcSQLException;
+import org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException;
 import org.jdbi.v3.core.statement.UnableToExecuteStatementException;
 import org.testng.annotations.Test;
 
@@ -31,12 +31,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
+import static com.facebook.airlift.json.JsonCodec.jsonCodec;
+import static com.facebook.airlift.json.JsonCodec.listJsonCodec;
 import static com.facebook.presto.spi.resourceGroups.QueryType.DELETE;
 import static com.facebook.presto.spi.resourceGroups.QueryType.EXPLAIN;
 import static com.facebook.presto.spi.resourceGroups.QueryType.INSERT;
 import static com.facebook.presto.spi.resourceGroups.QueryType.SELECT;
-import static io.airlift.json.JsonCodec.jsonCodec;
-import static io.airlift.json.JsonCodec.listJsonCodec;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
@@ -244,14 +244,14 @@ public class TestResourceGroupsDao
             dao.insertResourceGroupsGlobalProperties("invalid_property", "1h");
         }
         catch (UnableToExecuteStatementException ex) {
-            assertTrue(ex.getCause() instanceof JdbcSQLException);
+            assertTrue(ex.getCause() instanceof JdbcSQLIntegrityConstraintViolationException);
             assertTrue(ex.getCause().getMessage().startsWith("Check constraint violation:"));
         }
         try {
             dao.updateResourceGroupsGlobalProperties("invalid_property_name");
         }
         catch (UnableToExecuteStatementException ex) {
-            assertTrue(ex.getCause() instanceof JdbcSQLException);
+            assertTrue(ex.getCause() instanceof JdbcSQLIntegrityConstraintViolationException);
             assertTrue(ex.getCause().getMessage().startsWith("Check constraint violation:"));
         }
     }

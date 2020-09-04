@@ -18,15 +18,19 @@ import com.facebook.presto.client.IntervalDayTime;
 import com.facebook.presto.client.IntervalYearMonth;
 import com.facebook.presto.client.QueryData;
 import com.facebook.presto.client.QueryStatusInfo;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.JsonType;
+import com.facebook.presto.common.type.LongEnumType;
+import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.SqlTimestamp;
+import com.facebook.presto.common.type.SqlTimestampWithTimeZone;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarcharEnumType;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.PrestoWarning;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.SqlTimestamp;
-import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.type.SqlIntervalDayTime;
@@ -52,23 +56,24 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.Chars.isCharType;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TimeType.TIME;
-import static com.facebook.presto.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
-import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.Chars.isCharType;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TimeType.TIME;
+import static com.facebook.presto.common.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.testing.MaterializedResult.DEFAULT_PRECISION;
 import static com.facebook.presto.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
 import static com.facebook.presto.type.IntervalYearMonthType.INTERVAL_YEAR_MONTH;
+import static com.facebook.presto.type.IpAddressType.IPADDRESS;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Iterables.transform;
@@ -227,6 +232,9 @@ public class TestingPrestoClient
         else if (INTERVAL_YEAR_MONTH.equals(type)) {
             return new SqlIntervalYearMonth(IntervalYearMonth.parseMonths(String.valueOf(value)));
         }
+        else if (IPADDRESS.equals(type)) {
+            return value;
+        }
         else if (type instanceof ArrayType) {
             return ((List<Object>) value).stream()
                     .map(element -> convertToRowValue(((ArrayType) type).getElementType(), element))
@@ -238,8 +246,25 @@ public class TestingPrestoClient
                             e -> convertToRowValue(((MapType) type).getKeyType(), e.getKey()),
                             e -> convertToRowValue(((MapType) type).getValueType(), e.getValue())));
         }
+        else if (type instanceof RowType) {
+            Map<String, Object> data = (Map<String, Object>) value;
+            RowType rowType = (RowType) type;
+
+            return rowType.getFields().stream()
+                    .map(field -> convertToRowValue(field.getType(), data.get(field.getName().get())))
+                    .collect(toList());
+        }
         else if (type instanceof DecimalType) {
             return new BigDecimal((String) value);
+        }
+        else if (type instanceof JsonType) {
+            return value;
+        }
+        else if (type instanceof VarcharEnumType) {
+            return value;
+        }
+        else if (type instanceof LongEnumType) {
+            return ((Number) value).longValue();
         }
         else if (type.getTypeSignature().getBase().equals("ObjectId")) {
             return value;

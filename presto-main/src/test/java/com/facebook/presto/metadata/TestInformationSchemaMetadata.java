@@ -13,15 +13,18 @@
  */
 package com.facebook.presto.metadata;
 
+import com.facebook.airlift.json.JsonCodec;
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.client.ClientCapabilities;
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.common.predicate.Domain;
+import com.facebook.presto.common.predicate.NullableValue;
+import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.connector.MockConnectorFactory;
 import com.facebook.presto.connector.informationSchema.InformationSchemaColumnHandle;
 import com.facebook.presto.connector.informationSchema.InformationSchemaMetadata;
 import com.facebook.presto.connector.informationSchema.InformationSchemaTableHandle;
 import com.facebook.presto.connector.informationSchema.InformationSchemaTableLayoutHandle;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.ConnectorTableLayoutResult;
@@ -29,9 +32,6 @@ import com.facebook.presto.spi.ConnectorViewDefinition;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.connector.Connector;
-import com.facebook.presto.spi.predicate.Domain;
-import com.facebook.presto.spi.predicate.NullableValue;
-import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.testing.TestingConnectorContext;
 import com.facebook.presto.transaction.TransactionId;
@@ -40,7 +40,6 @@ import com.facebook.presto.type.TypeRegistry;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.json.JsonCodec;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.testng.annotations.Test;
@@ -48,13 +47,11 @@ import org.testng.annotations.Test;
 import java.util.List;
 import java.util.Optional;
 
-import static com.facebook.presto.connector.ConnectorId.createInformationSchemaConnectorId;
-import static com.facebook.presto.connector.ConnectorId.createSystemTablesConnectorId;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
+import static com.facebook.presto.spi.ConnectorId.createInformationSchemaConnectorId;
+import static com.facebook.presto.spi.ConnectorId.createSystemTablesConnectorId;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.transaction.InMemoryTransactionManager.createTestTransactionManager;
-import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static java.util.Arrays.stream;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
@@ -74,7 +71,7 @@ public class TestInformationSchemaMetadata
                                 new SchemaTableName("test_schema", "test_view"),
                                 new SchemaTableName("test_schema", "another_table")))
                 .withGetViews((connectorSession, prefix) -> {
-                    String viewJson = VIEW_DEFINITION_JSON_CODEC.toJson(new ViewDefinition("select 1", Optional.of("test_catalog"), Optional.of("test_schema"), ImmutableList.of(), Optional.empty()));
+                    String viewJson = VIEW_DEFINITION_JSON_CODEC.toJson(new ViewDefinition("select 1", Optional.of("test_catalog"), Optional.of("test_schema"), ImmutableList.of(), Optional.empty(), false));
                     SchemaTableName viewName = new SchemaTableName("test_schema", "test_view");
                     return ImmutableMap.of(viewName, new ConnectorViewDefinition(viewName, Optional.empty(), viewJson));
                 }).build();
@@ -173,9 +170,6 @@ public class TestInformationSchemaMetadata
         return testSessionBuilder()
                 .setCatalog("test_catalog")
                 .setSchema("information_schema")
-                .setClientCapabilities(stream(ClientCapabilities.values())
-                        .map(ClientCapabilities::toString)
-                        .collect(toImmutableSet()))
                 .setTransactionId(transactionId)
                 .build()
                 .toConnectorSession();

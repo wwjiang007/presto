@@ -13,11 +13,11 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.type.Re2JRegexp;
 import com.facebook.presto.type.Re2JRegexpType;
 import com.google.common.collect.ImmutableList;
@@ -26,12 +26,12 @@ import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.common.function.OperatorType.CAST;
+import static com.facebook.presto.common.type.Chars.padSpaces;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
-import static com.facebook.presto.spi.function.OperatorType.CAST;
-import static com.facebook.presto.spi.type.Chars.padSpaces;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static java.lang.invoke.MethodHandles.insertArguments;
 import static java.util.Collections.emptyList;
@@ -64,9 +64,9 @@ public class Re2JCastToRegexpFunction
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
+    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
-        return new ScalarFunctionImplementation(
+        return new BuiltInScalarFunctionImplementation(
                 false,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
                 insertArguments(METHOD_HANDLE, 0, dfaStatesLimit, dfaRetries, padSpaces, boundVariables.getLongVariable("x")));

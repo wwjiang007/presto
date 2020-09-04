@@ -14,33 +14,33 @@
 package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.annotation.UsedByGeneratedCode;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.common.type.TypeSignatureParameter;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.CastType;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.operator.aggregation.TypedSet;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignatureParameter;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.common.block.MethodHandleUtil.compose;
+import static com.facebook.presto.common.block.MethodHandleUtil.nativeValueGetter;
+import static com.facebook.presto.common.block.MethodHandleUtil.nativeValueWriter;
+import static com.facebook.presto.common.function.OperatorType.CAST;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
-import static com.facebook.presto.spi.block.MethodHandleUtil.compose;
-import static com.facebook.presto.spi.block.MethodHandleUtil.nativeValueGetter;
-import static com.facebook.presto.spi.block.MethodHandleUtil.nativeValueWriter;
-import static com.facebook.presto.spi.function.OperatorType.CAST;
 import static com.facebook.presto.spi.function.Signature.typeVariable;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Failures.internalError;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -60,7 +60,7 @@ public final class MapToMapCast
             MethodHandle.class,
             MethodHandle.class,
             Type.class,
-            ConnectorSession.class,
+            SqlFunctionProperties.class,
             Block.class);
 
     private static final MethodHandle CHECK_LONG_IS_NOT_NULL = methodHandle(MapToMapCast.class, "checkLongIsNotNull", Long.class);
@@ -79,7 +79,7 @@ public final class MapToMapCast
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
+    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         checkArgument(arity == 1, "Expected arity to be 1");
         Type fromKeyType = boundVariables.getTypeVariable("FK");
@@ -95,22 +95,22 @@ public final class MapToMapCast
         MethodHandle keyProcessor = buildProcessor(functionManager, fromKeyType, toKeyType, true);
         MethodHandle valueProcessor = buildProcessor(functionManager, fromValueType, toValueType, false);
         MethodHandle target = MethodHandles.insertArguments(METHOD_HANDLE, 0, keyProcessor, valueProcessor, toMapType);
-        return new ScalarFunctionImplementation(true, ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)), target);
+        return new BuiltInScalarFunctionImplementation(true, ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)), target);
     }
 
     /**
-     * The signature of the returned MethodHandle is (Block fromMap, int position, ConnectorSession session, BlockBuilder mapBlockBuilder)void.
+     * The signature of the returned MethodHandle is (Block fromMap, int position, SqlFunctionProperties properties, BlockBuilder mapBlockBuilder)void.
      * The processor will get the value from fromMap, cast it and write to toBlock.
      */
     private MethodHandle buildProcessor(FunctionManager functionManager, Type fromType, Type toType, boolean isKey)
     {
         MethodHandle getter = nativeValueGetter(fromType);
 
-        // Adapt cast that takes ([ConnectorSession,] ?) to one that takes (?, ConnectorSession), where ? is the return type of getter.
-        ScalarFunctionImplementation castImplementation = functionManager.getScalarFunctionImplementation(functionManager.lookupCast(CastType.CAST, fromType.getTypeSignature(), toType.getTypeSignature()));
+        // Adapt cast that takes ([SqlFunctionProperties,] ?) to one that takes (?, SqlFunctionProperties), where ? is the return type of getter.
+        BuiltInScalarFunctionImplementation castImplementation = functionManager.getBuiltInScalarFunctionImplementation(functionManager.lookupCast(CastType.CAST, fromType.getTypeSignature(), toType.getTypeSignature()));
         MethodHandle cast = castImplementation.getMethodHandle();
-        if (cast.type().parameterArray()[0] != ConnectorSession.class) {
-            cast = MethodHandles.dropArguments(cast, 0, ConnectorSession.class);
+        if (cast.type().parameterArray()[0] != SqlFunctionProperties.class) {
+            cast = MethodHandles.dropArguments(cast, 0, SqlFunctionProperties.class);
         }
         cast = permuteArguments(cast, methodType(cast.type().returnType(), cast.type().parameterArray()[1], cast.type().parameterArray()[0]), 1, 0);
         MethodHandle target = compose(cast, getter);
@@ -210,7 +210,7 @@ public final class MapToMapCast
             MethodHandle keyProcessFunction,
             MethodHandle valueProcessFunction,
             Type toMapType,
-            ConnectorSession session,
+            SqlFunctionProperties properties,
             Block fromMap)
     {
         checkState(toMapType.getTypeParameters().size() == 2, "Expect two type parameters for toMapType");
@@ -219,7 +219,7 @@ public final class MapToMapCast
         BlockBuilder keyBlockBuilder = toKeyType.createBlockBuilder(null, fromMap.getPositionCount() / 2);
         for (int i = 0; i < fromMap.getPositionCount(); i += 2) {
             try {
-                keyProcessFunction.invokeExact(fromMap, i, session, keyBlockBuilder);
+                keyProcessFunction.invokeExact(fromMap, i, properties, keyBlockBuilder);
             }
             catch (Throwable t) {
                 throw internalError(t);
@@ -239,7 +239,7 @@ public final class MapToMapCast
                 }
 
                 try {
-                    valueProcessFunction.invokeExact(fromMap, i + 1, session, blockBuilder);
+                    valueProcessFunction.invokeExact(fromMap, i + 1, properties, blockBuilder);
                 }
                 catch (Throwable t) {
                     throw internalError(t);

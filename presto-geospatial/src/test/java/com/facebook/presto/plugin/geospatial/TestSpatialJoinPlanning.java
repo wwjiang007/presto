@@ -14,12 +14,12 @@
 package com.facebook.presto.plugin.geospatial;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.geospatial.KdbTree;
 import com.facebook.presto.geospatial.KdbTreeUtils;
 import com.facebook.presto.geospatial.Rectangle;
 import com.facebook.presto.plugin.memory.MemoryConnectorFactory;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.sql.planner.LogicalPlanner;
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
@@ -228,24 +228,42 @@ public class TestSpatialJoinPlanning
     }
 
     @Test
-    public void testSpatialJoinIntersects()
+    public void testSpatialJoinBinaryRelations()
+    {
+        testBroadcastJoinRelationship("st_intersects");
+        testBroadcastJoinRelationship("st_crosses");
+        testBroadcastJoinRelationship("st_equals");
+        testBroadcastJoinRelationship("st_overlaps");
+        testBroadcastJoinRelationship("st_touches");
+
+        testDistributedJoinRelationship("st_intersects");
+        testDistributedJoinRelationship("st_crosses");
+        testDistributedJoinRelationship("st_equals");
+        testDistributedJoinRelationship("st_overlaps");
+        testDistributedJoinRelationship("st_touches");
+    }
+
+    private void testBroadcastJoinRelationship(String relation)
     {
         // broadcast
         assertPlan("SELECT b.name, a.name " +
                         "FROM (VALUES ('POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))', 'a')) AS a (wkt, name), (VALUES ('POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))', 'a')) AS b (wkt, name) " +
-                        "WHERE ST_Intersects(ST_GeometryFromText(a.wkt), ST_GeometryFromText(b.wkt))",
+                        "WHERE " + relation + "(ST_GeometryFromText(a.wkt), ST_GeometryFromText(b.wkt))",
                 anyTree(
-                        spatialJoin("st_intersects(geometry_a, geometry_b)",
+                        spatialJoin(relation + "(geometry_a, geometry_b)",
                                 project(ImmutableMap.of("geometry_a", expression("ST_GeometryFromText(cast(wkt_a as varchar))")), anyTree(values(ImmutableMap.of("wkt_a", 0)))),
                                 anyTree(project(ImmutableMap.of("geometry_b", expression("ST_GeometryFromText(cast(wkt_b as varchar))")), anyTree(values(ImmutableMap.of("wkt_b", 0))))))));
+    }
 
+    private void testDistributedJoinRelationship(String relation)
+    {
         // distributed
         assertDistributedPlan("SELECT b.name, a.name " +
                         "FROM (VALUES ('POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))', 'a')) AS a (wkt, name), (VALUES ('POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))', 'a')) AS b (wkt, name) " +
-                        "WHERE ST_Intersects(ST_GeometryFromText(a.wkt), ST_GeometryFromText(b.wkt))",
+                        "WHERE " + relation + "(ST_GeometryFromText(a.wkt), ST_GeometryFromText(b.wkt))",
                 withSpatialPartitioning("default.kdb_tree"),
                 anyTree(
-                        spatialJoin("st_intersects(geometry_a, geometry_b)", Optional.of(KDB_TREE_JSON),
+                        spatialJoin(relation + "(geometry_a, geometry_b)", Optional.of(KDB_TREE_JSON),
                                 anyTree(unnest(
                                         project(ImmutableMap.of("partitions", expression(format("spatial_partitions(cast('%s' as kdbtree), geometry_a)", KDB_TREE_JSON))),
                                                 project(ImmutableMap.of("geometry_a", expression("ST_GeometryFromText(cast(wkt_a as varchar))")), anyTree(values(ImmutableMap.of("wkt_a", 0))))))),
@@ -291,6 +309,56 @@ public class TestSpatialJoinPlanning
                                                 project(ImmutableMap.of("partitions", expression(format("spatial_partitions(cast('%s' as kdbtree), st_point_b, 3.1e0)", KDB_TREE_JSON)), "radius", expression("3.1e0")),
                                                     project(ImmutableMap.of("st_point_b", expression("ST_Point(cast(b_lng as double), cast(b_lat as double))")),
                                                         anyTree(values(ImmutableMap.of("b_lng", 0, "b_lat", 1))))))))));
+    }
+
+    @Test
+    public void testSphericalDistanceQuery()
+    {
+        String queryFormat = "SELECT b.name, a.name " +
+                "FROM (VALUES (2.1, 2.1, 'x')) AS a (lng, lat, name), (VALUES (2.1, 2.1, 'x')) AS b (lng, lat, name) " +
+                "WHERE ST_Distance(to_spherical_geography(ST_Point(a.lng, a.lat)), to_spherical_geography(ST_Point(b.lng, b.lat))) %s 3.1";
+        String queryLessThan = format(queryFormat, "<");
+        String queryLessThanEquals = format(queryFormat, "<=");
+
+        // broadcast
+        assertPlan(queryLessThan, anyTree(
+                spatialJoin("st_distance(st_point_a, st_point_b) < radius",
+                        project(ImmutableMap.of("st_point_a", expression("to_spherical_geography(ST_Point(cast(a_lng as double), cast(a_lat as double)))")),
+                                anyTree(values(ImmutableMap.of("a_lng", 0, "a_lat", 1)))),
+                        anyTree(project(ImmutableMap.of("st_point_b", expression("to_spherical_geography(ST_Point(cast(b_lng as double), cast(b_lat as double)))"), "radius", expression("3.1e0")),
+                                anyTree(values(ImmutableMap.of("b_lng", 0, "b_lat", 1))))))));
+
+        assertPlan(queryLessThanEquals, anyTree(
+                spatialJoin("st_distance(st_point_a, st_point_b) <= radius",
+                        project(ImmutableMap.of("st_point_a", expression("to_spherical_geography(ST_Point(cast(a_lng as double), cast(a_lat as double)))")),
+                                anyTree(values(ImmutableMap.of("a_lng", 0, "a_lat", 1)))),
+                        anyTree(project(ImmutableMap.of("st_point_b", expression("to_spherical_geography(ST_Point(cast(b_lng as double), cast(b_lat as double)))"), "radius", expression("3.1e0")),
+                                anyTree(values(ImmutableMap.of("b_lng", 0, "b_lat", 1))))))));
+
+        // distributed
+        assertDistributedPlan(queryLessThan, withSpatialPartitioning("memory.default.kdb_tree"),
+                anyTree(spatialJoin("st_distance(st_point_a, st_point_b) < radius", Optional.of(KDB_TREE_JSON),
+                        anyTree(unnest(
+                                project(ImmutableMap.of("partitions", expression(format("spatial_partitions(cast('%s' as kdbtree), st_point_a)", KDB_TREE_JSON))),
+                                        project(ImmutableMap.of("st_point_a", expression("to_spherical_geography(ST_Point(cast(a_lng as double), cast(a_lat as double)))")),
+                                                anyTree(values(ImmutableMap.of("a_lng", 0, "a_lat", 1))))))),
+                        anyTree(unnest(
+                                project(ImmutableMap.of("partitions", expression(format("spatial_partitions(cast('%s' as kdbtree), st_point_b, 3.1e0)", KDB_TREE_JSON)),
+                                        "radius", expression("3.1e0")),
+                                        project(ImmutableMap.of("st_point_b", expression("to_spherical_geography(ST_Point(cast(b_lng as double), cast(b_lat as double)))")),
+                                                anyTree(values(ImmutableMap.of("b_lng", 0, "b_lat", 1))))))))));
+
+        assertDistributedPlan(queryLessThanEquals, withSpatialPartitioning("memory.default.kdb_tree"), anyTree(
+                spatialJoin("st_distance(st_point_a, st_point_b) <= radius", Optional.of(KDB_TREE_JSON),
+                        anyTree(unnest(
+                                project(ImmutableMap.of("partitions", expression(format("spatial_partitions(cast('%s' as kdbtree), st_point_a)", KDB_TREE_JSON))),
+                                        project(ImmutableMap.of("st_point_a", expression("to_spherical_geography(ST_Point(cast(a_lng as double), cast(a_lat as double)))")),
+                                                anyTree(values(ImmutableMap.of("a_lng", 0, "a_lat", 1))))))),
+                        anyTree(
+                                project(ImmutableMap.of("partitions", expression(format("spatial_partitions(cast('%s' as kdbtree), st_point_b, 3.1e0)", KDB_TREE_JSON)),
+                                        "radius", expression("3.1e0")),
+                                        project(ImmutableMap.of("st_point_b", expression("to_spherical_geography(ST_Point(cast(b_lng as double), cast(b_lat as double)))")),
+                                                anyTree(values(ImmutableMap.of("b_lng", 0, "b_lat", 1)))))))));
     }
 
     @Test

@@ -97,7 +97,7 @@ Memory Management Properties
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     * **Type:** ``data size``
-    * **Default value:** ``query.max-total-memory * 2``
+    * **Default value:** ``query.max-memory * 2``
 
     This is the max amount of user and system memory a query can use across the entire cluster.
     System memory is allocated during execution for things that are not directly
@@ -115,6 +115,29 @@ Memory Management Properties
 
     This is the amount of memory set aside as headroom/buffer in the JVM heap
     for allocations that are not tracked by Presto.
+
+``query.low-memory-killer.policy``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``string``
+    * **Default value:** ``none``
+
+    The policy used for selecting the query to kill when the cluster is out of memory (OOM).
+    This property can have one of the following values: ``none``, ``total-reservation``,
+    or ``total-reservation-on-blocked-nodes``. ``none`` disables the cluster OOM killer.
+    The value of ``total-reservation`` configures a policy that kills the query with the largest
+    memory reservation across the cluster. The value of ``total-reservation-on-blocked-nodes``
+    configures a policy that kills the query using the most memory on the workers that are out of memory (blocked).
+
+``driver.max-page-partitioning-buffer-count``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    * **Type:** ``integer``
+    * **Default value:** ``1000000``
+
+    Maximum number of buffers used by repartitioning per driver. This number should be set
+    sufficiently large to avoid the error of requesting too many arrays from the array allocator
+    used in repartitioning.
 
 .. _tuning-spilling:
 

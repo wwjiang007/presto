@@ -13,16 +13,22 @@
  */
 package com.facebook.presto.sql.gen;
 
-import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.bytecode.BytecodeBlock;
+import com.facebook.presto.bytecode.BytecodeNode;
+import com.facebook.presto.bytecode.ClassDefinition;
+import com.facebook.presto.bytecode.MethodDefinition;
+import com.facebook.presto.bytecode.Parameter;
+import com.facebook.presto.bytecode.Scope;
+import com.facebook.presto.bytecode.Variable;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.relation.Predicate;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.operator.project.PageFieldsToInputParametersRewriter;
-import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.relation.InputReferenceExpression;
 import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
-import com.facebook.presto.spi.relation.Predicate;
 import com.facebook.presto.spi.relation.PredicateCompiler;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.RowExpressionVisitor;
@@ -31,64 +37,55 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
-import io.airlift.bytecode.BytecodeBlock;
-import io.airlift.bytecode.BytecodeNode;
-import io.airlift.bytecode.ClassDefinition;
-import io.airlift.bytecode.MethodDefinition;
-import io.airlift.bytecode.Parameter;
-import io.airlift.bytecode.Scope;
-import io.airlift.bytecode.Variable;
 
 import javax.inject.Inject;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Supplier;
 
+import static com.facebook.presto.bytecode.Access.FINAL;
+import static com.facebook.presto.bytecode.Access.PUBLIC;
+import static com.facebook.presto.bytecode.Access.a;
+import static com.facebook.presto.bytecode.Parameter.arg;
+import static com.facebook.presto.bytecode.ParameterizedType.type;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.and;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantFalse;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantInt;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.not;
 import static com.facebook.presto.operator.project.PageFieldsToInputParametersRewriter.rewritePageFieldsToInputParameters;
 import static com.facebook.presto.spi.StandardErrorCode.COMPILER_ERROR;
 import static com.facebook.presto.sql.gen.BytecodeUtils.invoke;
-import static com.facebook.presto.sql.gen.LambdaExpressionExtractor.extractLambdaExpressions;
+import static com.facebook.presto.sql.gen.LambdaBytecodeGenerator.generateMethodsForLambda;
 import static com.facebook.presto.util.CompilerUtils.defineClass;
 import static com.facebook.presto.util.CompilerUtils.makeClassName;
-import static io.airlift.bytecode.Access.FINAL;
-import static io.airlift.bytecode.Access.PUBLIC;
-import static io.airlift.bytecode.Access.a;
-import static io.airlift.bytecode.Parameter.arg;
-import static io.airlift.bytecode.ParameterizedType.type;
-import static io.airlift.bytecode.expression.BytecodeExpressions.and;
-import static io.airlift.bytecode.expression.BytecodeExpressions.constantFalse;
-import static io.airlift.bytecode.expression.BytecodeExpressions.constantInt;
-import static io.airlift.bytecode.expression.BytecodeExpressions.not;
 import static java.util.Objects.requireNonNull;
 
 public class RowExpressionPredicateCompiler
         implements PredicateCompiler
 {
-    private final FunctionManager functionManager;
+    private final Metadata metadata;
 
-    private final LoadingCache<RowExpression, Supplier<Predicate>> predicateCache;
+    private final LoadingCache<CacheKey, Supplier<Predicate>> predicateCache;
 
     @Inject
     public RowExpressionPredicateCompiler(Metadata metadata)
     {
-        this(requireNonNull(metadata, "metadata is null").getFunctionManager(), 10_000);
+        this(requireNonNull(metadata, "metadata is null"), 10_000);
     }
 
-    public RowExpressionPredicateCompiler(FunctionManager functionManager, int predicateCacheSize)
+    public RowExpressionPredicateCompiler(Metadata metadata, int predicateCacheSize)
     {
-        this.functionManager = requireNonNull(functionManager, "functionManager is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
 
         if (predicateCacheSize > 0) {
             predicateCache = CacheBuilder.newBuilder()
                     .recordStats()
                     .maximumSize(predicateCacheSize)
-                    .build(CacheLoader.from(this::compilePredicateInternal));
+                    .build(CacheLoader.from(cacheKey -> compilePredicateInternal(cacheKey.sqlFunctionProperties, cacheKey.rowExpression)));
         }
         else {
             predicateCache = null;
@@ -96,15 +93,15 @@ public class RowExpressionPredicateCompiler
     }
 
     @Override
-    public Supplier<Predicate> compilePredicate(RowExpression predicate)
+    public Supplier<Predicate> compilePredicate(SqlFunctionProperties sqlFunctionProperties, RowExpression predicate)
     {
         if (predicateCache == null) {
-            return compilePredicateInternal(predicate);
+            return compilePredicateInternal(sqlFunctionProperties, predicate);
         }
-        return predicateCache.getUnchecked(predicate);
+        return predicateCache.getUnchecked(new CacheKey(sqlFunctionProperties, predicate));
     }
 
-    private Supplier<Predicate> compilePredicateInternal(RowExpression predicate)
+    private Supplier<Predicate> compilePredicateInternal(SqlFunctionProperties sqlFunctionProperties, RowExpression predicate)
     {
         requireNonNull(predicate, "predicate is null");
 
@@ -114,7 +111,7 @@ public class RowExpressionPredicateCompiler
                 .toArray();
 
         CallSiteBinder callSiteBinder = new CallSiteBinder();
-        ClassDefinition classDefinition = definePredicateClass(result.getRewrittenExpression(), inputChannels, callSiteBinder);
+        ClassDefinition classDefinition = definePredicateClass(sqlFunctionProperties, result.getRewrittenExpression(), inputChannels, callSiteBinder);
 
         Class<? extends Predicate> predicateClass;
         try {
@@ -134,7 +131,7 @@ public class RowExpressionPredicateCompiler
         };
     }
 
-    private ClassDefinition definePredicateClass(RowExpression predicate, int[] inputChannels, CallSiteBinder callSiteBinder)
+    private ClassDefinition definePredicateClass(SqlFunctionProperties sqlFunctionProperties, RowExpression predicate, int[] inputChannels, CallSiteBinder callSiteBinder)
     {
         ClassDefinition classDefinition = new ClassDefinition(
                 a(PUBLIC, FINAL),
@@ -144,7 +141,7 @@ public class RowExpressionPredicateCompiler
 
         CachedInstanceBinder cachedInstanceBinder = new CachedInstanceBinder(classDefinition, callSiteBinder);
 
-        generatePredicateMethod(classDefinition, callSiteBinder, cachedInstanceBinder, predicate);
+        generatePredicateMethod(sqlFunctionProperties, classDefinition, callSiteBinder, cachedInstanceBinder, predicate);
 
         // getInputChannels
         classDefinition.declareMethod(a(PUBLIC), "getInputChannels", type(int[].class))
@@ -159,14 +156,15 @@ public class RowExpressionPredicateCompiler
     }
 
     private MethodDefinition generatePredicateMethod(
+            SqlFunctionProperties sqlFunctionProperties,
             ClassDefinition classDefinition,
             CallSiteBinder callSiteBinder,
             CachedInstanceBinder cachedInstanceBinder,
             RowExpression predicate)
     {
-        Map<LambdaDefinitionExpression, LambdaBytecodeGenerator.CompiledLambda> compiledLambdaMap = generateMethodsForLambda(classDefinition, callSiteBinder, cachedInstanceBinder, predicate);
+        Map<LambdaDefinitionExpression, LambdaBytecodeGenerator.CompiledLambda> compiledLambdaMap = generateMethodsForLambda(classDefinition, callSiteBinder, cachedInstanceBinder, predicate, metadata, sqlFunctionProperties);
 
-        Parameter session = arg("session", ConnectorSession.class);
+        Parameter properties = arg("properties", SqlFunctionProperties.class);
         Parameter page = arg("page", Page.class);
         Parameter position = arg("position", int.class);
 
@@ -175,7 +173,7 @@ public class RowExpressionPredicateCompiler
                 "evaluate",
                 type(boolean.class),
                 ImmutableList.<Parameter>builder()
-                        .add(session)
+                        .add(properties)
                         .add(page)
                         .add(position)
                         .build());
@@ -189,10 +187,12 @@ public class RowExpressionPredicateCompiler
 
         Variable wasNullVariable = scope.declareVariable("wasNull", body, constantFalse());
         RowExpressionCompiler compiler = new RowExpressionCompiler(
+                classDefinition,
                 callSiteBinder,
                 cachedInstanceBinder,
                 fieldReferenceCompiler(callSiteBinder),
-                functionManager,
+                metadata,
+                sqlFunctionProperties,
                 compiledLambdaMap);
 
         Variable result = scope.declareVariable(boolean.class, "result");
@@ -201,32 +201,6 @@ public class RowExpressionPredicateCompiler
                 .putVariable(result)
                 .append(and(not(wasNullVariable), result).ret());
         return method;
-    }
-
-    private Map<LambdaDefinitionExpression, LambdaBytecodeGenerator.CompiledLambda> generateMethodsForLambda(
-            ClassDefinition containerClassDefinition,
-            CallSiteBinder callSiteBinder,
-            CachedInstanceBinder cachedInstanceBinder,
-            RowExpression expression)
-    {
-        Set<LambdaDefinitionExpression> lambdaExpressions = ImmutableSet.copyOf(extractLambdaExpressions(expression));
-        ImmutableMap.Builder<LambdaDefinitionExpression, LambdaBytecodeGenerator.CompiledLambda> compiledLambdaMap = ImmutableMap.builder();
-
-        int counter = 0;
-        for (LambdaDefinitionExpression lambdaExpression : lambdaExpressions) {
-            LambdaBytecodeGenerator.CompiledLambda compiledLambda = LambdaBytecodeGenerator.preGenerateLambdaExpression(
-                    lambdaExpression,
-                    "lambda_" + counter,
-                    containerClassDefinition,
-                    compiledLambdaMap.build(),
-                    callSiteBinder,
-                    cachedInstanceBinder,
-                    functionManager);
-            compiledLambdaMap.put(lambdaExpression, compiledLambda);
-            counter++;
-        }
-
-        return compiledLambdaMap.build();
     }
 
     private static void declareBlockVariables(RowExpression expression, Parameter page, Scope scope, BytecodeBlock body)
@@ -275,5 +249,37 @@ public class RowExpressionPredicateCompiler
 
         cachedInstanceBinder.generateInitializations(thisVariable, body);
         body.ret();
+    }
+
+    private static final class CacheKey
+    {
+        private final SqlFunctionProperties sqlFunctionProperties;
+        private final RowExpression rowExpression;
+
+        private CacheKey(SqlFunctionProperties sqlFunctionProperties, RowExpression rowExpression)
+        {
+            this.sqlFunctionProperties = requireNonNull(sqlFunctionProperties, "sqlFunctionProperties is null");
+            this.rowExpression = requireNonNull(rowExpression, "rowExpression is null");
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof CacheKey)) {
+                return false;
+            }
+            CacheKey that = (CacheKey) o;
+            return Objects.equals(sqlFunctionProperties, that.sqlFunctionProperties) &&
+                    Objects.equals(rowExpression, that.rowExpression);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(sqlFunctionProperties, rowExpression);
+        }
     }
 }

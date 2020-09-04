@@ -13,18 +13,16 @@
  */
 package com.facebook.presto.util;
 
-import com.facebook.presto.spi.type.TimeZoneKey;
-import io.airlift.jodabridge.JdkBasedZoneInfoProvider;
+import com.facebook.presto.common.type.TimeZoneKey;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
-import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.time.ZoneId;
 import java.util.TreeSet;
 
-import static com.facebook.presto.spi.type.DateTimeEncoding.packDateTimeWithZone;
-import static com.facebook.presto.spi.type.TimeZoneKey.isUtcZoneId;
+import static com.facebook.presto.common.type.DateTimeEncoding.packDateTimeWithZone;
+import static com.facebook.presto.common.type.TimeZoneKey.isUtcZoneId;
 import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
 import static com.facebook.presto.util.DateTimeZoneIndex.packDateTimeWithZone;
 import static com.facebook.presto.util.DateTimeZoneIndex.unpackDateTimeZone;
@@ -32,26 +30,12 @@ import static org.testng.Assert.assertEquals;
 
 public class TestTimeZoneUtils
 {
-    @BeforeClass
-    protected void validateJodaZoneInfoProvider()
-    {
-        try {
-            JdkBasedZoneInfoProvider.registerAsJodaZoneInfoProvider();
-        }
-        catch (RuntimeException e) {
-            throw new RuntimeException("Set the following system property to JVM running the test: -Dorg.joda.time.DateTimeZone.Provider=com.facebook.presto.tz.JdkBasedZoneInfoProvider");
-        }
-    }
-
     @Test
     public void test()
     {
         TimeZoneKey.getTimeZoneKey("GMT-13:00");
 
-        TreeSet<String> jodaZones = new TreeSet<>(DateTimeZone.getAvailableIDs());
         TreeSet<String> jdkZones = new TreeSet<>(ZoneId.getAvailableZoneIds());
-        // We use JdkBasedZoneInfoProvider for joda
-        assertEquals(jodaZones, jdkZones);
 
         for (String zoneId : new TreeSet<>(jdkZones)) {
             if (zoneId.startsWith("Etc/") || zoneId.startsWith("GMT") || zoneId.startsWith("SystemV/")) {

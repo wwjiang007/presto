@@ -15,11 +15,16 @@ package com.facebook.presto.jdbc;
 
 import org.testng.annotations.Test;
 
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.Properties;
 
+import static com.facebook.presto.jdbc.ConnectionProperties.EXTRA_CREDENTIALS;
 import static com.facebook.presto.jdbc.ConnectionProperties.HTTP_PROXY;
+import static com.facebook.presto.jdbc.ConnectionProperties.SESSION_PROPERTIES;
 import static com.facebook.presto.jdbc.ConnectionProperties.SOCKS_PROXY;
 import static com.facebook.presto.jdbc.ConnectionProperties.SSL_TRUST_STORE_PASSWORD;
 import static com.facebook.presto.jdbc.ConnectionProperties.SSL_TRUST_STORE_PATH;
@@ -91,6 +96,20 @@ public class TestPrestoDriverUri
 
         // kerberos config without service name
         assertInvalid("jdbc:presto://localhost:8080?KerberosCredentialCachePath=/test", "Connection property 'KerberosCredentialCachePath' is not allowed");
+
+        // invalid extra credentials
+        assertInvalid("presto://localhost:8080?extraCredentials=:invalid", "Connection property 'extraCredentials' value is invalid:");
+        assertInvalid("presto://localhost:8080?extraCredentials=invalid:", "Connection property 'extraCredentials' value is invalid:");
+        assertInvalid("presto://localhost:8080?extraCredentials=:invalid", "Connection property 'extraCredentials' value is invalid:");
+
+        // duplicate credential keys
+        assertInvalid("presto://localhost:8080?extraCredentials=test.token.foo:bar;test.token.foo:xyz", "Connection property 'extraCredentials' value is invalid");
+
+        // empty extra credentials
+        assertInvalid("presto://localhost:8080?extraCredentials=", "Connection property 'extraCredentials' value is empty");
+
+        assertInvalid("presto://localhost:8080?sessionProperties=", "Connection property 'sessionProperties' value is empty");
+        assertInvalid("presto://localhost:8080?sessionProperties=sdf", "Connection property 'sessionProperties' value is invalid: sdf");
     }
 
     @Test(expectedExceptions = SQLException.class, expectedExceptionsMessageRegExp = "Connection property 'user' is required")
@@ -211,6 +230,27 @@ public class TestPrestoDriverUri
         Properties properties = parameters.getProperties();
         assertEquals(properties.getProperty(SSL_TRUST_STORE_PATH.getKey()), "truststore.jks");
         assertEquals(properties.getProperty(SSL_TRUST_STORE_PASSWORD.getKey()), "password");
+    }
+
+    @Test
+    public void testUriWithExtraCredentials()
+            throws SQLException, UnsupportedEncodingException
+    {
+        String extraCredentials = "test.token.foo:bar;test.token.abc:xyz;test.scopes:read_only|read_write";
+        String encodedExtraCredentials = URLEncoder.encode(extraCredentials, StandardCharsets.UTF_8.toString());
+        PrestoDriverUri parameters = createDriverUri("presto://localhost:8080?extraCredentials=" + encodedExtraCredentials);
+        Properties properties = parameters.getProperties();
+        assertEquals(properties.getProperty(EXTRA_CREDENTIALS.getKey()), extraCredentials);
+    }
+
+    @Test
+    public void testUriWithSessionProperties()
+            throws SQLException
+    {
+        String sessionProperties = "sessionProp1:sessionValue1;sessionProp2:sessionValue2";
+        PrestoDriverUri parameters = createDriverUri("presto://localhost:8080?sessionProperties=" + sessionProperties);
+        Properties properties = parameters.getProperties();
+        assertEquals(properties.getProperty(SESSION_PROPERTIES.getKey()), sessionProperties);
     }
 
     private static void assertUriPortScheme(PrestoDriverUri parameters, int port, String scheme)

@@ -13,32 +13,39 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.airlift.json.JsonCodec;
 import com.facebook.presto.Session;
 import com.facebook.presto.client.FailureInfo;
-import com.facebook.presto.execution.warnings.WarningCollector;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.RowBlockBuilder;
+import com.facebook.presto.common.block.SingleRowBlock;
+import com.facebook.presto.common.function.OperatorType;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.FunctionType;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.RowType.Field;
+import com.facebook.presto.common.type.StandardTypes;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.common.type.TypeUtils;
+import com.facebook.presto.expressions.DynamicFilters;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.operator.scalar.ArraySubscriptOperator;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.RowBlockBuilder;
+import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionMetadata;
-import com.facebook.presto.spi.function.OperatorType;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.FunctionType;
-import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.RowType.Field;
-import com.facebook.presto.spi.type.StandardTypes;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.function.SqlInvokedScalarFunctionImplementation;
 import com.facebook.presto.sql.InterpretedFunctionInvoker;
 import com.facebook.presto.sql.analyzer.ExpressionAnalyzer;
 import com.facebook.presto.sql.analyzer.Scope;
 import com.facebook.presto.sql.analyzer.SemanticErrorCode;
 import com.facebook.presto.sql.analyzer.SemanticException;
-import com.facebook.presto.sql.planner.Interpreters.LambdaSymbolResolver;
-import com.facebook.presto.sql.planner.iterative.rule.DesugarCurrentPath;
+import com.facebook.presto.sql.parser.SqlParser;
+import com.facebook.presto.sql.planner.Interpreters.LambdaVariableResolver;
 import com.facebook.presto.sql.planner.iterative.rule.DesugarCurrentUser;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
@@ -50,7 +57,6 @@ import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
-import com.facebook.presto.sql.tree.CurrentPath;
 import com.facebook.presto.sql.tree.CurrentUser;
 import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.ExistsPredicate;
@@ -92,12 +98,12 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.primitives.Primitives;
 import io.airlift.joni.Regex;
-import io.airlift.json.JsonCodec;
 import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -110,20 +116,27 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.facebook.presto.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.common.type.TypeUtils.writeNativeValue;
+import static com.facebook.presto.common.type.VarcharType.createVarcharType;
 import static com.facebook.presto.metadata.CastType.CAST;
+import static com.facebook.presto.metadata.FunctionManager.qualifyFunctionName;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
-import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static com.facebook.presto.sql.analyzer.ConstantExpressionVerifier.verifyExpressionIsConstant;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.createConstantAnalyzer;
+import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
+import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.tryResolveEnumLiteral;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.gen.VarArgsToMapAdapterGenerator.generateVarArgsToMapAdapter;
 import static com.facebook.presto.sql.planner.ExpressionDeterminismEvaluator.isDeterministic;
 import static com.facebook.presto.sql.planner.Interpreters.interpretDereference;
 import static com.facebook.presto.sql.planner.Interpreters.interpretLikePredicate;
+import static com.facebook.presto.sql.planner.LiteralEncoder.estimatedSizeInBytes;
 import static com.facebook.presto.sql.planner.LiteralEncoder.isSupportedLiteralType;
 import static com.facebook.presto.sql.planner.iterative.rule.CanonicalizeExpressionRewriter.canonicalizeExpression;
+import static com.facebook.presto.sql.relational.Expressions.variable;
+import static com.facebook.presto.sql.relational.SqlFunctionUtils.getSqlFunctionExpression;
 import static com.facebook.presto.type.LikeFunctions.isLikePattern;
 import static com.facebook.presto.type.LikeFunctions.unescapeLiteralLikePattern;
 import static com.facebook.presto.util.LegacyRowFieldOrdinalAccessUtil.parseAnonymousRowFieldOrdinalAccess;
@@ -134,12 +147,16 @@ import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
+import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toList;
 
 @Deprecated
 public class ExpressionInterpreter
 {
+    private static final long MAX_SERIALIZABLE_OBJECT_SIZE = 1000;
     private final Expression expression;
     private final Metadata metadata;
     private final LiteralEncoder literalEncoder;
@@ -255,13 +272,13 @@ public class ExpressionInterpreter
         return visitor.process(expression, null);
     }
 
-    public Object evaluate(SymbolResolver inputs)
+    public Object evaluate(VariableResolver inputs)
     {
         checkState(!optimize, "evaluate(SymbolResolver) not allowed for optimizer");
         return visitor.process(expression, inputs);
     }
 
-    public Object optimize(SymbolResolver inputs)
+    public Object optimize(VariableResolver inputs)
     {
         checkState(optimize, "evaluate(SymbolResolver) not allowed for interpreter");
         return visitor.process(expression, inputs);
@@ -271,6 +288,8 @@ public class ExpressionInterpreter
     private class Visitor
             extends AstVisitor<Object, Object>
     {
+        private final Map<NodeRef<Expression>, Type> generatedExpressionTypes = new HashMap<>();
+
         @Override
         public Object visitFieldReference(FieldReference node, Object context)
         {
@@ -280,6 +299,12 @@ public class ExpressionInterpreter
         @Override
         protected Object visitDereferenceExpression(DereferenceExpression node, Object context)
         {
+            Type returnType = type(node);
+            Optional<Object> maybeEnumValue = tryResolveEnumLiteral(node, returnType);
+            if (maybeEnumValue.isPresent()) {
+                return maybeEnumValue.get();
+            }
+
             Type type = type(node.getBase());
             // if there is no type for the base of Dereference, it must be QualifiedName
             if (type == null) {
@@ -297,7 +322,6 @@ public class ExpressionInterpreter
             }
 
             RowType rowType = (RowType) type;
-            Type returnType = type(node);
             String fieldName = node.getField().getValue();
             List<Field> fields = rowType.getFields();
             int index = -1;
@@ -326,7 +350,7 @@ public class ExpressionInterpreter
             // ExpressionInterpreter should only be invoked after planning.
             // As a result, this method should be unreachable.
             // However, RelationPlanner.visitUnnest and visitValues invokes evaluateConstantExpression.
-            return ((SymbolResolver) context).getValue(new Symbol(node.getValue()));
+            return ((VariableResolver) context).getValue(variable(node.getValue(), type(node)));
         }
 
         @Override
@@ -338,7 +362,7 @@ public class ExpressionInterpreter
         @Override
         protected Object visitSymbolReference(SymbolReference node, Object context)
         {
-            return ((SymbolResolver) context).getValue(Symbol.from(node));
+            return ((VariableResolver) context).getValue(variable(node.getName(), type(node)));
         }
 
         @Override
@@ -487,8 +511,17 @@ public class ExpressionInterpreter
             return Boolean.TRUE.equals(invokeOperator(OperatorType.EQUAL, ImmutableList.of(type1, type2), ImmutableList.of(operand1, operand2)));
         }
 
+        private void addGeneratedExpressionType(Expression expression, Type type)
+        {
+            generatedExpressionTypes.put(NodeRef.of(expression), type);
+        }
+
         private Type type(Expression expression)
         {
+            Type type = generatedExpressionTypes.get(NodeRef.of(expression));
+            if (type != null) {
+                return type;
+            }
             return expressionTypes.get(NodeRef.of(expression));
         }
 
@@ -505,7 +538,7 @@ public class ExpressionInterpreter
                         }
                         return Stream.of(expression);
                     })
-                    .collect(Collectors.toList());
+                    .collect(toList());
 
             if ((!values.isEmpty() && !(values.get(0) instanceof Expression)) || values.size() == 1) {
                 return values.get(0);
@@ -658,10 +691,10 @@ public class ExpressionInterpreter
                     return value;
                 case MINUS:
                     FunctionHandle operatorHandle = metadata.getFunctionManager().resolveOperator(OperatorType.NEGATION, fromTypes(types(node.getValue())));
-                    MethodHandle handle = metadata.getFunctionManager().getScalarFunctionImplementation(operatorHandle).getMethodHandle();
+                    MethodHandle handle = metadata.getFunctionManager().getBuiltInScalarFunctionImplementation(operatorHandle).getMethodHandle();
 
-                    if (handle.type().parameterCount() > 0 && handle.type().parameterType(0) == ConnectorSession.class) {
-                        handle = handle.bindTo(session);
+                    if (handle.type().parameterCount() > 0 && handle.type().parameterType(0) == SqlFunctionProperties.class) {
+                        handle = handle.bindTo(connectorSession.getSqlFunctionProperties());
                     }
                     try {
                         return handle.invokeWithArguments(value);
@@ -780,8 +813,8 @@ public class ExpressionInterpreter
                     OperatorType.EQUAL,
                     ImmutableList.of(commonType, commonType),
                     ImmutableList.of(
-                            functionInvoker.invoke(firstCast, connectorSession, ImmutableList.of(first)),
-                            functionInvoker.invoke(secondCast, connectorSession, ImmutableList.of(second)))));
+                            functionInvoker.invoke(firstCast, session.getSqlFunctionProperties(), ImmutableList.of(first)),
+                            functionInvoker.invoke(secondCast, session.getSqlFunctionProperties(), ImmutableList.of(second)))));
 
             if (equal) {
                 return null;
@@ -875,20 +908,53 @@ public class ExpressionInterpreter
                 argumentValues.add(value);
                 argumentTypes.add(type);
             }
-            FunctionHandle functionHandle = metadata.getFunctionManager().resolveFunction(session, node.getName(), fromTypes(argumentTypes));
+            FunctionHandle functionHandle = metadata.getFunctionManager().resolveFunction(
+                    session.getTransactionId(),
+                    qualifyFunctionName(node.getName()),
+                    fromTypes(argumentTypes));
             FunctionMetadata functionMetadata = metadata.getFunctionManager().getFunctionMetadata(functionHandle);
-            for (int i = 0; i < argumentValues.size(); i++) {
-                Object value = argumentValues.get(i);
-                if (value == null && !functionMetadata.isCalledOnNullInput()) {
-                    return null;
+            if (!functionMetadata.isCalledOnNullInput()) {
+                for (int i = 0; i < argumentValues.size(); i++) {
+                    Object value = argumentValues.get(i);
+                    if (value == null) {
+                        return null;
+                    }
                 }
             }
 
             // do not optimize non-deterministic functions
-            if (optimize && (!functionMetadata.isDeterministic() || hasUnresolvedValue(argumentValues) || node.getName().equals(QualifiedName.of("fail")))) {
-                return new FunctionCall(node.getName(), node.getWindow(), node.isDistinct(), toExpressions(argumentValues, argumentTypes));
+            if (optimize &&
+                    (!functionMetadata.isDeterministic() ||
+                            hasUnresolvedValue(argumentValues) ||
+                            node.getName().equals(QualifiedName.of(DynamicFilters.DynamicFilterPlaceholderFunction.NAME)) ||
+                            node.getName().equals(QualifiedName.of("fail")))) {
+                return new FunctionCall(node.getName(), node.getWindow(), node.isDistinct(), node.isIgnoreNulls(), toExpressions(argumentValues, argumentTypes));
             }
-            return functionInvoker.invoke(functionHandle, connectorSession, argumentValues);
+
+            Object result;
+
+            switch (functionMetadata.getImplementationType()) {
+                case BUILTIN:
+                    result = functionInvoker.invoke(functionHandle, session.getSqlFunctionProperties(), argumentValues);
+                    break;
+                case SQL:
+                    Expression function = getSqlFunctionExpression(functionMetadata, (SqlInvokedScalarFunctionImplementation) metadata.getFunctionManager().getScalarFunctionImplementation(functionHandle), metadata, session.getSqlFunctionProperties(), node.getArguments());
+                    ExpressionInterpreter functionInterpreter = new ExpressionInterpreter(
+                            function,
+                            metadata,
+                            session,
+                            getExpressionTypes(session, metadata, new SqlParser(), TypeProvider.empty(), function, emptyList(), WarningCollector.NOOP),
+                            optimize);
+                    result = functionInterpreter.visitor.process(function, context);
+                    break;
+                default:
+                    throw new IllegalArgumentException(format("Unsupported function implementation type: %s", functionMetadata.getImplementationType()));
+            }
+
+            if (optimize && !isSerializable(result, type(node))) {
+                return new FunctionCall(node.getName(), node.getWindow(), node.isDistinct(), node.isIgnoreNulls(), toExpressions(argumentValues, argumentTypes));
+            }
+            return result;
         }
 
         @Override
@@ -915,7 +981,7 @@ public class ExpressionInterpreter
                             .map(Primitives::wrap)
                             .collect(toImmutableList()),
                     argumentNames,
-                    map -> process(body, new LambdaSymbolResolver(map)));
+                    map -> process(body, new LambdaVariableResolver(map)));
         }
 
         @Override
@@ -923,7 +989,7 @@ public class ExpressionInterpreter
         {
             List<Object> values = node.getValues().stream()
                     .map(value -> process(value, context))
-                    .collect(toImmutableList());
+                    .collect(toList());
             Object function = process(node.getFunction(), context);
 
             if (hasUnresolvedValue(values) || hasUnresolvedValue(function)) {
@@ -1063,16 +1129,19 @@ public class ExpressionInterpreter
                 return value;
             }
 
-            // hack!!! don't optimize CASTs for types that cannot be represented in the SQL AST
-            // TODO: this will not be an issue when we migrate to RowExpression tree for this, which allows arbitrary literals.
             if (optimize && !isSupportedLiteralType(type(node))) {
+                // do not invoke cast function if it can produce unserializable type
                 return new Cast(toExpression(value, sourceType), node.getType(), node.isSafe(), node.isTypeOnly());
             }
 
             FunctionHandle operator = metadata.getFunctionManager().lookupCast(CAST, sourceType.getTypeSignature(), targetType.getTypeSignature());
 
             try {
-                return functionInvoker.invoke(operator, connectorSession, ImmutableList.of(value));
+                Object castedValue = functionInvoker.invoke(operator, session.getSqlFunctionProperties(), ImmutableList.of(value));
+                if (optimize && !isSerializable(castedValue, type(node))) {
+                    return new Cast(toExpression(value, sourceType), node.getType(), node.isSafe(), node.isTypeOnly());
+                }
+                return castedValue;
             }
             catch (RuntimeException e) {
                 if (node.isSafe()) {
@@ -1091,7 +1160,9 @@ public class ExpressionInterpreter
             for (Expression expression : node.getValues()) {
                 Object value = process(expression, context);
                 if (value instanceof Expression) {
-                    return visitFunctionCall(new FunctionCall(QualifiedName.of(ArrayConstructor.ARRAY_CONSTRUCTOR), node.getValues()), context);
+                    FunctionCall functionCall = new FunctionCall(QualifiedName.of(ArrayConstructor.ARRAY_CONSTRUCTOR), node.getValues());
+                    addGeneratedExpressionType(functionCall, type(node));
+                    return visitFunctionCall(functionCall, context);
                 }
                 writeNativeValue(elementType, arrayBlockBuilder, value);
             }
@@ -1102,13 +1173,9 @@ public class ExpressionInterpreter
         @Override
         protected Object visitCurrentUser(CurrentUser node, Object context)
         {
-            return visitFunctionCall(DesugarCurrentUser.getCall(node), context);
-        }
-
-        @Override
-        protected Object visitCurrentPath(CurrentPath node, Object context)
-        {
-            return visitFunctionCall(DesugarCurrentPath.getCall(node), context);
+            FunctionCall functionCall = DesugarCurrentUser.getCall(node);
+            addGeneratedExpressionType(functionCall, type(node));
+            return visitFunctionCall(functionCall, context);
         }
 
         @Override
@@ -1156,6 +1223,18 @@ public class ExpressionInterpreter
                 return new SubscriptExpression(toExpression(base, type(node.getBase())), toExpression(index, type(node.getIndex())));
             }
 
+            // Subscript on Row hasn't got a dedicated operator. It is interpreted by hand.
+            if (base instanceof SingleRowBlock) {
+                SingleRowBlock row = (SingleRowBlock) base;
+                int position = toIntExact((long) index - 1);
+                if (position < 0 || position >= row.getPositionCount()) {
+                    throw new PrestoException(StandardErrorCode.INVALID_FUNCTION_ARGUMENT, "ROW index out of bounds: " + (position + 1));
+                }
+                Type returnType = type(node.getBase()).getTypeParameters().get(position);
+                return TypeUtils.readNativeValue(returnType, row, position);
+            }
+
+            // Subscript on Array or Map is interpreted using operator.
             return invokeOperator(OperatorType.SUBSCRIPT, types(node.getBase(), node.getIndex()), ImmutableList.of(base, index));
         }
 
@@ -1201,12 +1280,19 @@ public class ExpressionInterpreter
         private Object invokeOperator(OperatorType operatorType, List<? extends Type> argumentTypes, List<Object> argumentValues)
         {
             FunctionHandle operatorHandle = metadata.getFunctionManager().resolveOperator(operatorType, fromTypes(argumentTypes));
-            return functionInvoker.invoke(operatorHandle, connectorSession, argumentValues);
+            return functionInvoker.invoke(operatorHandle, session.getSqlFunctionProperties(), argumentValues);
         }
 
         private Expression toExpression(Object base, Type type)
         {
             return literalEncoder.toExpression(base, type);
+        }
+
+        private boolean isSerializable(Object value, Type type)
+        {
+            requireNonNull(type, "type is null");
+            // If value is already Expression, literal values contained inside should already have been made serializable. Otherwise, we make sure the object is small and serializable.
+            return value instanceof Expression || (isSupportedLiteralType(type) && estimatedSizeInBytes(value) <= MAX_SERIALIZABLE_OBJECT_SIZE);
         }
 
         private List<Expression> toExpressions(List<Object> values, List<Type> types)
@@ -1215,11 +1301,18 @@ public class ExpressionInterpreter
         }
     }
 
-    private static Expression createFailureFunction(RuntimeException exception, Type type)
+    private Expression createFailureFunction(RuntimeException exception, Type type)
     {
         requireNonNull(exception, "Exception is null");
 
         String failureInfo = JsonCodec.jsonCodec(FailureInfo.class).toJson(Failures.toFailure(exception).toFailureInfo());
+        if (exception instanceof PrestoException) {
+            long errorCode = ((PrestoException) exception).getErrorCode().getCode();
+            FunctionCall jsonParse = new FunctionCall(QualifiedName.of("json_parse"), ImmutableList.of(new StringLiteral(failureInfo)));
+            FunctionCall failureFunction = new FunctionCall(QualifiedName.of("fail"), ImmutableList.of(literalEncoder.toExpression(errorCode, INTEGER), jsonParse));
+
+            return new Cast(failureFunction, type.getTypeSignature().toString());
+        }
         FunctionCall jsonParse = new FunctionCall(QualifiedName.of("json_parse"), ImmutableList.of(new StringLiteral(failureInfo)));
         FunctionCall failureFunction = new FunctionCall(QualifiedName.of("fail"), ImmutableList.of(jsonParse));
 

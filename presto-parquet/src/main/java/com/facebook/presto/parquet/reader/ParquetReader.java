@@ -13,21 +13,28 @@
  */
 package com.facebook.presto.parquet.reader;
 
+import com.facebook.presto.common.block.ArrayBlock;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.IntArrayBlock;
+import com.facebook.presto.common.block.LongArrayBlock;
+import com.facebook.presto.common.block.RowBlock;
+import com.facebook.presto.common.block.RunLengthEncodedBlock;
+import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeSignatureParameter;
 import com.facebook.presto.memory.context.AggregatedMemoryContext;
 import com.facebook.presto.memory.context.LocalMemoryContext;
+import com.facebook.presto.parquet.ColumnReader;
+import com.facebook.presto.parquet.ColumnReaderFactory;
 import com.facebook.presto.parquet.Field;
 import com.facebook.presto.parquet.GroupField;
 import com.facebook.presto.parquet.ParquetCorruptionException;
 import com.facebook.presto.parquet.ParquetDataSource;
+import com.facebook.presto.parquet.ParquetResultVerifierUtils;
 import com.facebook.presto.parquet.PrimitiveField;
 import com.facebook.presto.parquet.RichColumnDescriptor;
-import com.facebook.presto.spi.block.ArrayBlock;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.RowBlock;
-import com.facebook.presto.spi.block.RunLengthEncodedBlock;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeSignatureParameter;
+import io.airlift.units.DataSize;
 import it.unimi.dsi.fastutil.booleans.BooleanArrayList;
 import it.unimi.dsi.fastutil.booleans.BooleanList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -38,6 +45,7 @@ import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnPath;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.PrimitiveColumnIO;
+import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -45,12 +53,17 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.StandardTypes.ARRAY;
+import static com.facebook.presto.common.type.StandardTypes.MAP;
+import static com.facebook.presto.common.type.StandardTypes.ROW;
+import static com.facebook.presto.common.type.StandardTypes.SMALLINT;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
 import static com.facebook.presto.parquet.ParquetValidationUtils.validateParquet;
 import static com.facebook.presto.parquet.reader.ListColumnReader.calculateCollectionOffsets;
-import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
-import static com.facebook.presto.spi.type.StandardTypes.MAP;
-import static com.facebook.presto.spi.type.StandardTypes.ROW;
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.Math.max;
 import static java.lang.Math.min;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
@@ -59,11 +72,15 @@ public class ParquetReader
         implements Closeable
 {
     private static final int MAX_VECTOR_LENGTH = 1024;
+    private static final int INITIAL_BATCH_SIZE = 1;
+    private static final int BATCH_SIZE_GROWTH_FACTOR = 2;
 
     private final List<BlockMetaData> blocks;
     private final List<PrimitiveColumnIO> columns;
     private final ParquetDataSource dataSource;
     private final AggregatedMemoryContext systemMemoryContext;
+    private final boolean batchReadEnabled;
+    private final boolean enableVerification;
 
     private int currentBlock;
     private BlockMetaData currentBlockMetadata;
@@ -71,21 +88,37 @@ public class ParquetReader
     private long currentGroupRowCount;
     private long nextRowInGroup;
     private int batchSize;
-    private final PrimitiveColumnReader[] columnReaders;
+
+    private int nextBatchSize = INITIAL_BATCH_SIZE;
+    private final ColumnReader[] columnReaders;
+    protected final ColumnReader[] verificationColumnReaders;
+    private long[] maxBytesPerCell;
+    private long maxCombinedBytesPerRow;
+    private final long maxReadBlockBytes;
+    private int maxBatchSize = MAX_VECTOR_LENGTH;
 
     private AggregatedMemoryContext currentRowGroupMemoryContext;
 
-    public ParquetReader(MessageColumnIO messageColumnIO,
+    public ParquetReader(MessageColumnIO
+            messageColumnIO,
             List<BlockMetaData> blocks,
             ParquetDataSource dataSource,
-            AggregatedMemoryContext systemMemoryContext)
+            AggregatedMemoryContext systemMemoryContext,
+            DataSize maxReadBlockSize,
+            boolean batchReadEnabled,
+            boolean enableVerification)
     {
         this.blocks = blocks;
         this.dataSource = requireNonNull(dataSource, "dataSource is null");
         this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
         this.currentRowGroupMemoryContext = systemMemoryContext.newAggregatedMemoryContext();
+        this.maxReadBlockBytes = requireNonNull(maxReadBlockSize, "maxReadBlockSize is null").toBytes();
+        this.batchReadEnabled = batchReadEnabled;
         columns = messageColumnIO.getLeaves();
-        columnReaders = new PrimitiveColumnReader[columns.size()];
+        columnReaders = new ColumnReader[columns.size()];
+        this.enableVerification = enableVerification;
+        verificationColumnReaders = enableVerification ? new ColumnReader[columns.size()] : null;
+        maxBytesPerCell = new long[columns.size()];
     }
 
     @Override
@@ -107,12 +140,20 @@ public class ParquetReader
             return -1;
         }
 
-        batchSize = toIntExact(min(MAX_VECTOR_LENGTH, currentGroupRowCount - nextRowInGroup));
+        batchSize = toIntExact(min(nextBatchSize, maxBatchSize));
+        nextBatchSize = min(batchSize * BATCH_SIZE_GROWTH_FACTOR, MAX_VECTOR_LENGTH);
+        batchSize = toIntExact(min(batchSize, currentGroupRowCount - nextRowInGroup));
 
         nextRowInGroup += batchSize;
         currentPosition += batchSize;
         Arrays.stream(columnReaders)
                 .forEach(reader -> reader.prepareNextRead(batchSize));
+
+        if (enableVerification) {
+            Arrays.stream(verificationColumnReaders)
+                    .forEach(reader -> reader.prepareNextRead(batchSize));
+        }
+
         return batchSize;
     }
 
@@ -161,7 +202,7 @@ public class ParquetReader
         IntList offsets = new IntArrayList();
         BooleanList valueIsNull = new BooleanArrayList();
         calculateCollectionOffsets(field, offsets, valueIsNull, columnChunk.getDefinitionLevels(), columnChunk.getRepetitionLevels());
-        Block mapBlock = ((MapType) field.getType()).createBlockFromKeyValue(Optional.of(valueIsNull.toBooleanArray()), offsets.toIntArray(), blocks[0], blocks[1]);
+        Block mapBlock = ((MapType) field.getType()).createBlockFromKeyValue(offsets.size() - 1, Optional.of(valueIsNull.toBooleanArray()), offsets.toIntArray(), blocks[0], blocks[1]);
         return new ColumnChunk(mapBlock, columnChunk.getDefinitionLevels(), columnChunk.getRepetitionLevels());
     }
 
@@ -194,8 +235,10 @@ public class ParquetReader
             throws IOException
     {
         ColumnDescriptor columnDescriptor = field.getDescriptor();
-        PrimitiveColumnReader columnReader = columnReaders[field.getId()];
-        if (columnReader.getPageReader() == null) {
+
+        int fieldId = field.getId();
+        ColumnReader columnReader = columnReaders[fieldId];
+        if (!columnReader.isInitialized()) {
             validateParquet(currentBlockMetadata.getRowCount() > 0, "Row group has 0 rows");
             ColumnChunkMetaData metadata = getColumnChunkMetaData(columnDescriptor);
             long startingPosition = metadata.getStartingPos();
@@ -204,9 +247,33 @@ public class ParquetReader
             dataSource.readFully(startingPosition, buffer);
             ColumnChunkDescriptor descriptor = new ColumnChunkDescriptor(columnDescriptor, metadata, totalSize);
             ParquetColumnChunk columnChunk = new ParquetColumnChunk(descriptor, buffer, 0);
-            columnReader.setPageReader(columnChunk.readAllPages());
+            columnReader.init(columnChunk.readAllPages(), field);
+
+            if (enableVerification) {
+                ColumnReader verificationColumnReader = verificationColumnReaders[field.getId()];
+                ParquetColumnChunk columnChunkVerfication = new ParquetColumnChunk(descriptor, buffer, 0);
+                verificationColumnReader.init(columnChunkVerfication.readAllPages(), field);
+            }
         }
-        return columnReader.readPrimitive(field);
+
+        ColumnChunk columnChunk = columnReader.readNext();
+        columnChunk = typeCoercion(columnChunk, field.getDescriptor().getPrimitiveType().getPrimitiveTypeName(), field.getType());
+
+        if (enableVerification) {
+            ColumnReader verificationColumnReader = verificationColumnReaders[field.getId()];
+            ColumnChunk expected = verificationColumnReader.readNext();
+            ParquetResultVerifierUtils.verifyColumnChunks(columnChunk, expected, columnDescriptor.getPath().length > 1, field, dataSource.getId());
+        }
+
+        // update max size per primitive column chunk
+        long bytesPerCell = columnChunk.getBlock().getSizeInBytes() / batchSize;
+        if (maxBytesPerCell[fieldId] < bytesPerCell) {
+            // update batch size
+            maxCombinedBytesPerRow = maxCombinedBytesPerRow - maxBytesPerCell[fieldId] + bytesPerCell;
+            maxBatchSize = toIntExact(min(maxBatchSize, max(1, maxReadBlockBytes / maxCombinedBytesPerRow)));
+            maxBytesPerCell[fieldId] = bytesPerCell;
+        }
+        return columnChunk;
     }
 
     private byte[] allocateBlock(int length)
@@ -232,7 +299,11 @@ public class ParquetReader
     {
         for (PrimitiveColumnIO columnIO : columns) {
             RichColumnDescriptor column = new RichColumnDescriptor(columnIO.getColumnDescriptor(), columnIO.getType().asPrimitiveType());
-            columnReaders[columnIO.getId()] = PrimitiveColumnReader.createReader(column);
+            columnReaders[columnIO.getId()] = ColumnReaderFactory.createReader(column, batchReadEnabled);
+
+            if (enableVerification) {
+                verificationColumnReaders[columnIO.getId()] = ColumnReaderFactory.createReader(column, false);
+            }
         }
     }
 
@@ -269,5 +340,72 @@ public class ParquetReader
     public AggregatedMemoryContext getSystemMemoryContext()
     {
         return systemMemoryContext;
+    }
+
+    /**
+     * The reader returns the Block type (LongArrayBlock or IntArrayBlock) based on the physical type of the column in Parquet file, but
+     * operators after scan expect output block type based on the metadata defined in Hive table. This causes issues as the operators call
+     * methods that are based on the expected output block type which the returned block type may not have implemented.
+     * To overcome this issue rewrite the block.
+     */
+    private static ColumnChunk typeCoercion(ColumnChunk columnChunk, PrimitiveTypeName physicalDataType, Type outputType)
+    {
+        Block newBlock = null;
+        if (SMALLINT.equals(outputType) || TINYINT.equals(outputType)) {
+            if (columnChunk.getBlock() instanceof IntArrayBlock) {
+                newBlock = rewriteIntegerArrayBlock((IntArrayBlock) columnChunk.getBlock(), outputType);
+            }
+            else if (columnChunk.getBlock() instanceof LongArrayBlock) {
+                newBlock = rewriteLongArrayBlock((LongArrayBlock) columnChunk.getBlock(), outputType);
+            }
+        }
+        else if (INTEGER.equals(outputType) && physicalDataType == PrimitiveTypeName.INT64) {
+            if (columnChunk.getBlock() instanceof LongArrayBlock) {
+                newBlock = rewriteLongArrayBlock((LongArrayBlock) columnChunk.getBlock(), outputType);
+            }
+        }
+        else if (BIGINT.equals(outputType) && physicalDataType == PrimitiveTypeName.INT32) {
+            if (columnChunk.getBlock() instanceof IntArrayBlock) {
+                newBlock = rewriteIntegerArrayBlock((IntArrayBlock) columnChunk.getBlock(), outputType);
+            }
+        }
+
+        if (newBlock != null) {
+            return new ColumnChunk(newBlock, columnChunk.getDefinitionLevels(), columnChunk.getRepetitionLevels());
+        }
+
+        return columnChunk;
+    }
+
+    private static Block rewriteIntegerArrayBlock(IntArrayBlock intArrayBlock, Type targetType)
+    {
+        int positionCount = intArrayBlock.getPositionCount();
+        BlockBuilder newBlockBuilder = targetType.createBlockBuilder(null, positionCount);
+        for (int position = 0; position < positionCount; position++) {
+            if (intArrayBlock.isNull(position)) {
+                newBlockBuilder.appendNull();
+            }
+            else {
+                targetType.writeLong(newBlockBuilder, intArrayBlock.getInt(position));
+            }
+        }
+
+        return newBlockBuilder.build();
+    }
+
+    private static Block rewriteLongArrayBlock(LongArrayBlock longArrayBlock, Type targetType)
+    {
+        int positionCount = longArrayBlock.getPositionCount();
+        BlockBuilder newBlockBuilder = targetType.createBlockBuilder(null, positionCount);
+        for (int position = 0; position < positionCount; position++) {
+            if (longArrayBlock.isNull(position)) {
+                newBlockBuilder.appendNull();
+            }
+            else {
+                targetType.writeLong(newBlockBuilder, longArrayBlock.getLong(position, 0));
+            }
+        }
+
+        return newBlockBuilder.build();
     }
 }

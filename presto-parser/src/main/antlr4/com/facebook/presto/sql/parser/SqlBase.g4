@@ -26,8 +26,8 @@ standaloneExpression
     : expression EOF
     ;
 
-standalonePathSpecification
-    : pathSpecification EOF
+standaloneRoutineBody
+    : routineBody EOF
     ;
 
 statement
@@ -49,16 +49,26 @@ statement
     | DROP TABLE (IF EXISTS)? qualifiedName                            #dropTable
     | INSERT INTO qualifiedName columnAliases? query                   #insertInto
     | DELETE FROM qualifiedName (WHERE booleanExpression)?             #delete
-    | ALTER TABLE from=qualifiedName RENAME TO to=qualifiedName        #renameTable
-    | ALTER TABLE tableName=qualifiedName
-        RENAME COLUMN from=identifier TO to=identifier                 #renameColumn
-    | ALTER TABLE tableName=qualifiedName
-        DROP COLUMN column=qualifiedName                               #dropColumn
-    | ALTER TABLE tableName=qualifiedName
-        ADD COLUMN column=columnDefinition                             #addColumn
+    | ALTER TABLE (IF EXISTS)? from=qualifiedName
+        RENAME TO to=qualifiedName                                     #renameTable
+    | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
+        RENAME COLUMN (IF EXISTS)? from=identifier TO to=identifier    #renameColumn
+    | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
+        DROP COLUMN (IF EXISTS)? column=qualifiedName                  #dropColumn
+    | ALTER TABLE (IF EXISTS)? tableName=qualifiedName
+        ADD COLUMN (IF NOT EXISTS)? column=columnDefinition            #addColumn
     | ANALYZE qualifiedName (WITH properties)?                         #analyze
-    | CREATE (OR REPLACE)? VIEW qualifiedName AS query                 #createView
+    | CREATE (OR REPLACE)? VIEW qualifiedName
+            (SECURITY (DEFINER | INVOKER))? AS query                       #createView
     | DROP VIEW (IF EXISTS)? qualifiedName                             #dropView
+    | CREATE (OR REPLACE)? FUNCTION functionName=qualifiedName
+        '(' (sqlParameterDeclaration (',' sqlParameterDeclaration)*)? ')'
+        RETURNS returnType=type
+        (COMMENT string)?
+        routineCharacteristics routineBody                             #createFunction
+    | ALTER FUNCTION qualifiedName types?
+      alterRoutineCharacteristics                                      #alterFunction
+    | DROP FUNCTION (IF EXISTS)? qualifiedName types?                  #dropFunction
     | CALL qualifiedName '(' (callArgument (',' callArgument)*)? ')'   #call
     | CREATE ROLE name=identifier
         (WITH ADMIN grantor)?                                          #createRole
@@ -88,6 +98,7 @@ statement
         ('(' explainOption (',' explainOption)* ')')? statement        #explain
     | SHOW CREATE TABLE qualifiedName                                  #showCreateTable
     | SHOW CREATE VIEW qualifiedName                                   #showCreateView
+    | SHOW CREATE FUNCTION qualifiedName types?                        #showCreateFunction
     | SHOW TABLES ((FROM | IN) qualifiedName)?
         (LIKE pattern=string (ESCAPE escape=string)?)?                 #showTables
     | SHOW SCHEMAS ((FROM | IN) identifier)?
@@ -100,7 +111,8 @@ statement
     | SHOW ROLE GRANTS ((FROM | IN) identifier)?                       #showRoleGrants
     | DESCRIBE qualifiedName                                           #showColumns
     | DESC qualifiedName                                               #showColumns
-    | SHOW FUNCTIONS                                                   #showFunctions
+    | SHOW FUNCTIONS
+        (LIKE pattern=string (ESCAPE escape=string)?)?                 #showFunctions
     | SHOW SESSION                                                     #showSession
     | SET SESSION qualifiedName EQ expression                          #setSession
     | RESET SESSION qualifiedName                                      #resetSession
@@ -112,7 +124,6 @@ statement
     | EXECUTE identifier (USING expression (',' expression)*)?         #execute
     | DESCRIBE INPUT identifier                                        #describeInput
     | DESCRIBE OUTPUT identifier                                       #describeOutput
-    | SET PATH pathSpecification                                       #setPath
     ;
 
 query
@@ -142,6 +153,59 @@ properties
 
 property
     : identifier EQ expression
+    ;
+
+sqlParameterDeclaration
+    : identifier type
+    ;
+
+routineCharacteristics
+    : routineCharacteristic*
+    ;
+
+routineCharacteristic
+    : LANGUAGE language
+    | determinism
+    | nullCallClause
+    ;
+
+alterRoutineCharacteristics
+    : alterRoutineCharacteristic*
+    ;
+
+alterRoutineCharacteristic
+    : nullCallClause
+    ;
+
+routineBody
+    : returnStatement
+    | externalBodyReference
+    ;
+
+returnStatement
+    : RETURN expression
+    ;
+
+externalBodyReference
+    : EXTERNAL (NAME externalRoutineName)?
+    ;
+
+language
+    : SQL
+    | identifier
+    ;
+
+determinism
+    : DETERMINISTIC
+    | NOT DETERMINISTIC;
+
+nullCallClause
+    : RETURNS NULL ON NULL INPUT
+    | CALLED ON NULL INPUT
+    ;
+
+externalRoutineName
+    : identifier
     ;
 
 queryNoWith:
@@ -301,7 +365,7 @@ primaryExpression
     | ROW '(' expression (',' expression)* ')'                                            #rowConstructor
     | qualifiedName '(' ASTERISK ')' filter? over?                                        #functionCall
     | qualifiedName '(' (setQuantifier? expression (',' expression)*)?
-        (ORDER BY sortItem (',' sortItem)*)? ')' filter? over?                            #functionCall
+        (ORDER BY sortItem (',' sortItem)*)? ')' filter? (nullTreatment? over)?           #functionCall
     | identifier '->' expression                                                          #lambda
     | '(' (identifier (',' identifier)*)? ')' '->' expression                             #lambda
     | '(' query ')'                                                                       #subqueryExpression
@@ -321,7 +385,6 @@ primaryExpression
     | name=LOCALTIME ('(' precision=INTEGER_VALUE ')')?                                   #specialDateTimeFunction
     | name=LOCALTIMESTAMP ('(' precision=INTEGER_VALUE ')')?                              #specialDateTimeFunction
     | name=CURRENT_USER                                                                   #currentUser
-    | name=CURRENT_PATH                                                                   #currentPath
     | SUBSTRING '(' valueExpression FROM valueExpression (FOR valueExpression)? ')'       #substring
     | NORMALIZE '(' valueExpression (',' normalForm)? ')'                                 #normalize
     | EXTRACT '(' identifier FROM valueExpression ')'                                     #extract
@@ -332,6 +395,11 @@ primaryExpression
 string
     : STRING                                #basicStringLiteral
     | UNICODE_STRING (UESCAPE STRING)?      #unicodeStringLiteral
+    ;
+
+nullTreatment
+    : IGNORE NULLS
+    | RESPECT NULLS
     ;
 
 timeZoneSpecifier
@@ -361,6 +429,10 @@ intervalField
 
 normalForm
     : NFD | NFC | NFKD | NFKC
+    ;
+
+types
+    : '(' (type (',' type)*)? ')'
     ;
 
 type
@@ -436,15 +508,6 @@ callArgument
     | identifier '=>' expression    #namedArgument
     ;
 
-pathElement
-    : identifier '.' identifier     #qualifiedArgument
-    | identifier                    #unqualifiedArgument
-    ;
-
-pathSpecification
-    : pathElement (',' pathElement)*
-    ;
-
 privilege
     : SELECT | DELETE | INSERT | identifier
     ;
@@ -487,21 +550,21 @@ nonReserved
     // IMPORTANT: this rule must only contain tokens. Nested rules are not supported. See SqlParser.exitNonReserved
     : ADD | ADMIN | ALL | ANALYZE | ANY | ARRAY | ASC | AT
     | BERNOULLI
-    | CALL | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CURRENT | CURRENT_ROLE
-    | DATA | DATE | DAY | DESC | DISTRIBUTED
-    | EXCLUDING | EXPLAIN
-    | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTIONS
+    | CALL | CALLED | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CURRENT | CURRENT_ROLE
+    | DATA | DATE | DAY | DEFINER | DESC | DETERMINISTIC | DISTRIBUTED
+    | EXCLUDING | EXPLAIN | EXTERNAL
+    | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTION | FUNCTIONS
     | GRANT | GRANTED | GRANTS | GRAPHVIZ
     | HOUR
-    | IF | INCLUDING | INPUT | INTERVAL | IO | ISOLATION
+    | IF | IGNORE | INCLUDING | INPUT | INTERVAL | INVOKER | IO | ISOLATION
     | JSON
-    | LAST | LATERAL | LEVEL | LIMIT | LOGICAL
+    | LANGUAGE | LAST | LATERAL | LEVEL | LIMIT | LOGICAL
     | MAP | MINUTE | MONTH
-    | NFC | NFD | NFKC | NFKD | NO | NONE | NULLIF | NULLS
+    | NAME | NFC | NFD | NFKC | NFKD | NO | NONE | NULLIF | NULLS
     | ONLY | OPTION | ORDINALITY | OUTPUT | OVER
-    | PARTITION | PARTITIONS | PATH | POSITION | PRECEDING | PRIVILEGES | PROPERTIES
-    | RANGE | READ | RENAME | REPEATABLE | REPLACE | RESET | RESTRICT | REVOKE | ROLE | ROLES | ROLLBACK | ROW | ROWS
-    | SCHEMA | SCHEMAS | SECOND | SERIALIZABLE | SESSION | SET | SETS
+    | PARTITION | PARTITIONS | POSITION | PRECEDING | PRIVILEGES | PROPERTIES
+    | RANGE | READ | RENAME | REPEATABLE | REPLACE | RESET | RESPECT | RESTRICT | RETURN | RETURNS | REVOKE | ROLE | ROLES | ROLLBACK | ROW | ROWS
+    | SCHEMA | SCHEMAS | SECOND | SECURITY | SERIALIZABLE | SESSION | SET | SETS | SQL
     | SHOW | SOME | START | STATS | SUBSTRING | SYSTEM
     | TABLES | TABLESAMPLE | TEXT | TIME | TIMESTAMP | TO | TRANSACTION | TRY_CAST | TYPE
     | UNBOUNDED | UNCOMMITTED | USE | USER
@@ -526,6 +589,7 @@ BERNOULLI: 'BERNOULLI';
 BETWEEN: 'BETWEEN';
 BY: 'BY';
 CALL: 'CALL';
+CALLED: 'CALLED';
 CASCADE: 'CASCADE';
 CASE: 'CASE';
 CAST: 'CAST';
@@ -541,7 +605,6 @@ CROSS: 'CROSS';
 CUBE: 'CUBE';
 CURRENT: 'CURRENT';
 CURRENT_DATE: 'CURRENT_DATE';
-CURRENT_PATH: 'CURRENT_PATH';
 CURRENT_ROLE: 'CURRENT_ROLE';
 CURRENT_TIME: 'CURRENT_TIME';
 CURRENT_TIMESTAMP: 'CURRENT_TIMESTAMP';
@@ -550,9 +613,11 @@ DATA: 'DATA';
 DATE: 'DATE';
 DAY: 'DAY';
 DEALLOCATE: 'DEALLOCATE';
+DEFINER: 'DEFINER';
 DELETE: 'DELETE';
 DESC: 'DESC';
 DESCRIBE: 'DESCRIBE';
+DETERMINISTIC: 'DETERMINISTIC';
 DISTINCT: 'DISTINCT';
 DISTRIBUTED: 'DISTRIBUTED';
 DROP: 'DROP';
@@ -565,6 +630,7 @@ EXECUTE: 'EXECUTE';
 EXISTS: 'EXISTS';
 EXPLAIN: 'EXPLAIN';
 EXTRACT: 'EXTRACT';
+EXTERNAL: 'EXTERNAL';
 FALSE: 'FALSE';
 FILTER: 'FILTER';
 FIRST: 'FIRST';
@@ -573,6 +639,7 @@ FOR: 'FOR';
 FORMAT: 'FORMAT';
 FROM: 'FROM';
 FULL: 'FULL';
+FUNCTION: 'FUNCTION';
 FUNCTIONS: 'FUNCTIONS';
 GRANT: 'GRANT';
 GRANTED: 'GRANTED';
@@ -583,6 +650,7 @@ GROUPING: 'GROUPING';
 HAVING: 'HAVING';
 HOUR: 'HOUR';
 IF: 'IF';
+IGNORE: 'IGNORE';
 IN: 'IN';
 INCLUDING: 'INCLUDING';
 INNER: 'INNER';
@@ -591,11 +659,13 @@ INSERT: 'INSERT';
 INTERSECT: 'INTERSECT';
 INTERVAL: 'INTERVAL';
 INTO: 'INTO';
+INVOKER: 'INVOKER';
 IO: 'IO';
 IS: 'IS';
 ISOLATION: 'ISOLATION';
 JSON: 'JSON';
 JOIN: 'JOIN';
+LANGUAGE: 'LANGUAGE';
 LAST: 'LAST';
 LATERAL: 'LATERAL';
 LEFT: 'LEFT';
@@ -608,6 +678,7 @@ LOGICAL: 'LOGICAL';
 MAP: 'MAP';
 MINUTE: 'MINUTE';
 MONTH: 'MONTH';
+NAME: 'NAME';
 NATURAL: 'NATURAL';
 NFC : 'NFC';
 NFD : 'NFD';
@@ -631,7 +702,6 @@ OUTPUT: 'OUTPUT';
 OVER: 'OVER';
 PARTITION: 'PARTITION';
 PARTITIONS: 'PARTITIONS';
-PATH: 'PATH';
 POSITION: 'POSITION';
 PRECEDING: 'PRECEDING';
 PREPARE: 'PREPARE';
@@ -644,7 +714,10 @@ RENAME: 'RENAME';
 REPEATABLE: 'REPEATABLE';
 REPLACE: 'REPLACE';
 RESET: 'RESET';
+RESPECT: 'RESPECT';
 RESTRICT: 'RESTRICT';
+RETURN: 'RETURN';
+RETURNS: 'RETURNS';
 REVOKE: 'REVOKE';
 RIGHT: 'RIGHT';
 ROLE: 'ROLE';
@@ -656,6 +729,7 @@ ROWS: 'ROWS';
 SCHEMA: 'SCHEMA';
 SCHEMAS: 'SCHEMAS';
 SECOND: 'SECOND';
+SECURITY: 'SECURITY';
 SELECT: 'SELECT';
 SERIALIZABLE: 'SERIALIZABLE';
 SESSION: 'SESSION';
@@ -663,6 +737,7 @@ SET: 'SET';
 SETS: 'SETS';
 SHOW: 'SHOW';
 SOME: 'SOME';
+SQL: 'SQL';
 START: 'START';
 STATS: 'STATS';
 SUBSTRING: 'SUBSTRING';

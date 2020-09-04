@@ -14,22 +14,22 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.execution.warnings.WarningCollector;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.predicate.DiscreteValues;
+import com.facebook.presto.common.predicate.Domain;
+import com.facebook.presto.common.predicate.Marker;
+import com.facebook.presto.common.predicate.NullableValue;
+import com.facebook.presto.common.predicate.Range;
+import com.facebook.presto.common.predicate.Ranges;
+import com.facebook.presto.common.predicate.SortedRangeSet;
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.predicate.Utils;
+import com.facebook.presto.common.predicate.ValueSet;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorNotFoundException;
-import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.function.FunctionHandle;
-import com.facebook.presto.spi.predicate.DiscreteValues;
-import com.facebook.presto.spi.predicate.Domain;
-import com.facebook.presto.spi.predicate.Marker;
-import com.facebook.presto.spi.predicate.NullableValue;
-import com.facebook.presto.spi.predicate.Range;
-import com.facebook.presto.spi.predicate.Ranges;
-import com.facebook.presto.spi.predicate.SortedRangeSet;
-import com.facebook.presto.spi.predicate.TupleDomain;
-import com.facebook.presto.spi.predicate.Utils;
-import com.facebook.presto.spi.predicate.ValueSet;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.ExpressionUtils;
 import com.facebook.presto.sql.InterpretedFunctionInvoker;
 import com.facebook.presto.sql.analyzer.ExpressionAnalyzer;
@@ -96,16 +96,16 @@ public final class ExpressionDomainTranslator
         this.literalEncoder = requireNonNull(literalEncoder, "literalEncoder is null");
     }
 
-    public Expression toPredicate(TupleDomain<Symbol> tupleDomain)
+    public Expression toPredicate(TupleDomain<String> tupleDomain)
     {
         if (tupleDomain.isNone()) {
             return FALSE_LITERAL;
         }
 
-        Map<Symbol, Domain> domains = tupleDomain.getDomains().get();
+        Map<String, Domain> domains = tupleDomain.getDomains().get();
         return domains.entrySet().stream()
-                .sorted(comparing(entry -> entry.getKey().getName()))
-                .map(entry -> toPredicate(entry.getValue(), entry.getKey().toSymbolReference()))
+                .sorted(comparing(entry -> entry.getKey()))
+                .map(entry -> toPredicate(entry.getValue(), new SymbolReference(entry.getKey())))
                 .collect(collectingAndThen(toImmutableList(), ExpressionUtils::combineConjuncts));
     }
 
@@ -301,10 +301,10 @@ public final class ExpressionDomainTranslator
             this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionManager());
         }
 
-        private Type checkedTypeLookup(Symbol symbol)
+        private Type checkedTypeLookup(Expression expression)
         {
-            Type type = types.get(symbol);
-            checkArgument(type != null, "Types is missing info for symbol: %s", symbol);
+            Type type = types.get(expression);
+            checkArgument(type != null, "Types is missing info for expression: %s", expression);
             return type;
         }
 
@@ -336,8 +336,8 @@ public final class ExpressionDomainTranslator
             ExtractionResult leftResult = process(node.getLeft(), complement);
             ExtractionResult rightResult = process(node.getRight(), complement);
 
-            TupleDomain<Symbol> leftTupleDomain = leftResult.getTupleDomain();
-            TupleDomain<Symbol> rightTupleDomain = rightResult.getTupleDomain();
+            TupleDomain<String> leftTupleDomain = leftResult.getTupleDomain();
+            TupleDomain<String> rightTupleDomain = rightResult.getTupleDomain();
 
             LogicalBinaryExpression.Operator operator = complement ? node.getOperator().flip() : node.getOperator();
             switch (operator) {
@@ -347,7 +347,7 @@ public final class ExpressionDomainTranslator
                             combineConjuncts(leftResult.getRemainingExpression(), rightResult.getRemainingExpression()));
 
                 case OR:
-                    TupleDomain<Symbol> columnUnionedTupleDomain = TupleDomain.columnWiseUnion(leftTupleDomain, rightTupleDomain);
+                    TupleDomain<String> columnUnionedTupleDomain = TupleDomain.columnWiseUnion(leftTupleDomain, rightTupleDomain);
 
                     // In most cases, the columnUnionedTupleDomain is only a superset of the actual strict union
                     // and so we can return the current node as the remainingExpression so that all bounds will be double checked again at execution time.
@@ -398,10 +398,10 @@ public final class ExpressionDomainTranslator
 
             Expression symbolExpression = normalized.getSymbolExpression();
             if (symbolExpression instanceof SymbolReference) {
-                Symbol symbol = Symbol.from(symbolExpression);
+                String symbolName = ((SymbolReference) symbolExpression).getName();
                 NullableValue value = normalized.getValue();
                 Type type = value.getType(); // common type for symbol and value
-                return createComparisonExtractionResult(normalized.getComparisonOperator(), symbol, type, value.getValue(), complement);
+                return createComparisonExtractionResult(normalized.getComparisonOperator(), symbolName, type, value.getValue(), complement);
             }
             else if (symbolExpression instanceof Cast) {
                 Cast castExpression = (Cast) symbolExpression;
@@ -450,8 +450,8 @@ public final class ExpressionDomainTranslator
         private Optional<NormalizedSimpleComparison> toNormalizedSimpleComparison(ComparisonExpression comparison)
         {
             Map<NodeRef<Expression>, Type> expressionTypes = analyzeExpression(comparison);
-            Object left = ExpressionInterpreter.expressionOptimizer(comparison.getLeft(), metadata, session, expressionTypes).optimize(NoOpSymbolResolver.INSTANCE);
-            Object right = ExpressionInterpreter.expressionOptimizer(comparison.getRight(), metadata, session, expressionTypes).optimize(NoOpSymbolResolver.INSTANCE);
+            Object left = ExpressionInterpreter.expressionOptimizer(comparison.getLeft(), metadata, session, expressionTypes).optimize(NoOpVariableResolver.INSTANCE);
+            Object right = ExpressionInterpreter.expressionOptimizer(comparison.getRight(), metadata, session, expressionTypes).optimize(NoOpVariableResolver.INSTANCE);
 
             Type leftType = expressionTypes.get(NodeRef.of(comparison.getLeft()));
             Type rightType = expressionTypes.get(NodeRef.of(comparison.getRight()));
@@ -495,7 +495,7 @@ public final class ExpressionDomainTranslator
             return ExpressionAnalyzer.getExpressionTypes(session, metadata, new SqlParser(), types, expression, emptyList(), WarningCollector.NOOP);
         }
 
-        private static ExtractionResult createComparisonExtractionResult(ComparisonExpression.Operator comparisonOperator, Symbol column, Type type, @Nullable Object value, boolean complement)
+        private static ExtractionResult createComparisonExtractionResult(ComparisonExpression.Operator comparisonOperator, String column, Type type, @Nullable Object value, boolean complement)
         {
             if (value == null) {
                 switch (comparisonOperator) {
@@ -655,7 +655,7 @@ public final class ExpressionDomainTranslator
         private Optional<Object> floorValue(Type fromType, Type toType, Object value)
         {
             return getSaturatedFloorCastOperator(fromType, toType)
-                    .map((operator) -> functionInvoker.invoke(operator, session.toConnectorSession(), value));
+                    .map((operator) -> functionInvoker.invoke(operator, session.getSqlFunctionProperties(), value));
         }
 
         private Optional<FunctionHandle> getSaturatedFloorCastOperator(Type fromType, Type toType)
@@ -671,7 +671,7 @@ public final class ExpressionDomainTranslator
         private int compareOriginalValueToCoerced(Type originalValueType, Object originalValue, Type coercedValueType, Object coercedValue)
         {
             FunctionHandle castToOriginalTypeOperator = metadata.getFunctionManager().lookupCast(CAST, coercedValueType.getTypeSignature(), originalValueType.getTypeSignature());
-            Object coercedValueInOriginalType = functionInvoker.invoke(castToOriginalTypeOperator, session.toConnectorSession(), coercedValue);
+            Object coercedValueInOriginalType = functionInvoker.invoke(castToOriginalTypeOperator, session.getSqlFunctionProperties(), coercedValue);
             Block originalValueBlock = Utils.nativeValueToBlock(originalValueType, originalValue);
             Block coercedValueBlock = Utils.nativeValueToBlock(originalValueType, coercedValueInOriginalType);
             return originalValueType.compareTo(originalValueBlock, 0, coercedValueBlock, 0);
@@ -720,11 +720,10 @@ public final class ExpressionDomainTranslator
                 return super.visitIsNullPredicate(node, complement);
             }
 
-            Symbol symbol = Symbol.from(node.getValue());
-            Type columnType = checkedTypeLookup(symbol);
+            Type columnType = checkedTypeLookup(node.getValue());
             Domain domain = complementIfNecessary(Domain.onlyNull(columnType), complement);
             return new ExtractionResult(
-                    TupleDomain.withColumnDomains(ImmutableMap.of(symbol, domain)),
+                    TupleDomain.withColumnDomains(ImmutableMap.of(((SymbolReference) node.getValue()).getName(), domain)),
                     TRUE_LITERAL);
         }
 
@@ -735,12 +734,11 @@ public final class ExpressionDomainTranslator
                 return super.visitIsNotNullPredicate(node, complement);
             }
 
-            Symbol symbol = Symbol.from(node.getValue());
-            Type columnType = checkedTypeLookup(symbol);
+            Type columnType = checkedTypeLookup(node.getValue());
 
             Domain domain = complementIfNecessary(Domain.notNull(columnType), complement);
             return new ExtractionResult(
-                    TupleDomain.withColumnDomains(ImmutableMap.of(symbol, domain)),
+                    TupleDomain.withColumnDomains(ImmutableMap.of(((SymbolReference) node.getValue()).getName(), domain)),
                     TRUE_LITERAL);
         }
 
@@ -795,16 +793,16 @@ public final class ExpressionDomainTranslator
 
     public static class ExtractionResult
     {
-        private final TupleDomain<Symbol> tupleDomain;
+        private final TupleDomain<String> tupleDomain;
         private final Expression remainingExpression;
 
-        public ExtractionResult(TupleDomain<Symbol> tupleDomain, Expression remainingExpression)
+        public ExtractionResult(TupleDomain<String> tupleDomain, Expression remainingExpression)
         {
             this.tupleDomain = requireNonNull(tupleDomain, "tupleDomain is null");
             this.remainingExpression = requireNonNull(remainingExpression, "remainingExpression is null");
         }
 
-        public TupleDomain<Symbol> getTupleDomain()
+        public TupleDomain<String> getTupleDomain()
         {
             return tupleDomain;
         }

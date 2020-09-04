@@ -13,44 +13,73 @@
  */
 package com.facebook.presto.verifier.framework;
 
-import com.facebook.presto.jdbc.QueryStats;
-import com.facebook.presto.verifier.event.FailureInfo;
-import com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster;
+import com.facebook.presto.verifier.event.QueryFailure;
 
-import java.util.EnumMap;
-import java.util.LinkedHashSet;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.CONTROL;
-import static com.facebook.presto.verifier.framework.QueryOrigin.TargetCluster.TEST;
-import static com.google.common.base.Throwables.getStackTraceAsString;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static java.util.Objects.requireNonNull;
 
 public class VerificationContext
 {
-    private Map<TargetCluster, Set<QueryException>> failures = new EnumMap<>(TargetCluster.class);
+    private final String sourceQueryName;
+    private final String suite;
 
-    public VerificationContext()
+    private final int resubmissionCount;
+    private final Set<QueryException> queryExceptions;
+
+    private VerificationContext(
+            String sourceQueryName,
+            String suite,
+            int resubmissionCount,
+            Set<QueryException> queryExceptions)
     {
-        failures.put(CONTROL, new LinkedHashSet<>());
-        failures.put(TEST, new LinkedHashSet<>());
+        this.sourceQueryName = requireNonNull(sourceQueryName, "sourceQueryName is null");
+        this.suite = requireNonNull(suite, "suite is null");
+        this.resubmissionCount = resubmissionCount;
+        this.queryExceptions = new HashSet<>(queryExceptions);
     }
 
-    public void recordFailure(QueryException exception)
+    public static VerificationContext create(String sourceQueryName, String suite)
     {
-        failures.get(exception.getQueryOrigin().getCluster()).add(exception);
+        return new VerificationContext(sourceQueryName, suite, 0, new HashSet<>());
     }
 
-    public List<FailureInfo> getAllFailures(TargetCluster cluster)
+    public static VerificationContext createForResubmission(VerificationContext existing)
     {
-        return failures.get(cluster).stream()
-                .map(exception -> new FailureInfo(
-                        exception.getQueryOrigin().getStage(),
-                        exception.getErrorCode(),
-                        exception.getQueryStats().map(QueryStats::getQueryId),
-                        getStackTraceAsString(exception)))
+        return new VerificationContext(
+                existing.sourceQueryName,
+                existing.suite,
+                existing.resubmissionCount + 1,
+                existing.queryExceptions);
+    }
+
+    public String getSourceQueryName()
+    {
+        return sourceQueryName;
+    }
+
+    public String getSuite()
+    {
+        return suite;
+    }
+
+    public int getResubmissionCount()
+    {
+        return resubmissionCount;
+    }
+
+    public void addException(QueryException exception)
+    {
+        queryExceptions.add(exception);
+    }
+
+    public List<QueryFailure> getQueryFailures()
+    {
+        return queryExceptions.stream()
+                .map(QueryException::toQueryFailure)
                 .collect(toImmutableList());
     }
 }

@@ -11,7 +11,7 @@
             <source>NOTICE</source>
         </file>
     </files>
-    
+
     <dependencySets>
         <!-- lib -->
         <dependencySet>
@@ -65,12 +65,20 @@
             <outputDirectory>plugin/session-property-managers</outputDirectory>
         </fileSet>
         <fileSet>
+            <directory>${project.build.directory}/dependency/presto-function-namespace-managers-${project.version}</directory>
+            <outputDirectory>plugin/function-namespace-managers</outputDirectory>
+        </fileSet>
+        <fileSet>
             <directory>${project.build.directory}/dependency/presto-jmx-${project.version}</directory>
             <outputDirectory>plugin/jmx</outputDirectory>
         </fileSet>
         <fileSet>
             <directory>${project.build.directory}/dependency/presto-cassandra-${project.version}</directory>
             <outputDirectory>plugin/cassandra</outputDirectory>
+        </fileSet>
+        <fileSet>
+            <directory>${project.build.directory}/dependency/presto-pinot-${project.version}</directory>
+            <outputDirectory>plugin/pinot</outputDirectory>
         </fileSet>
         <fileSet>
             <directory>${project.build.directory}/dependency/presto-example-http-${project.version}</directory>
@@ -111,6 +119,10 @@
         <fileSet>
             <directory>${project.build.directory}/dependency/presto-mysql-${project.version}</directory>
             <outputDirectory>plugin/mysql</outputDirectory>
+        </fileSet>
+        <fileSet>
+            <directory>${project.build.directory}/dependency/presto-oracle-${project.version}</directory>
+            <outputDirectory>plugin/oracle</outputDirectory>
         </fileSet>
         <fileSet>
             <directory>${project.build.directory}/dependency/presto-postgresql-${project.version}</directory>
@@ -163,6 +175,10 @@
         <fileSet>
             <directory>${project.build.directory}/dependency/presto-elasticsearch-${project.version}</directory>
             <outputDirectory>plugin/presto-elasticsearch</outputDirectory>
+        </fileSet>
+        <fileSet>
+            <directory>${project.build.directory}/dependency/presto-druid-${project.version}</directory>
+            <outputDirectory>plugin/presto-druid</outputDirectory>
         </fileSet>
     </fileSets>
 </assembly>

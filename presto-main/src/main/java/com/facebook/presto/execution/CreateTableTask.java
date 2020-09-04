@@ -14,16 +14,16 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableMetadata;
 import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.tree.ColumnDefinition;
 import com.facebook.presto.sql.tree.CreateTable;
@@ -44,12 +44,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.metadata.MetadataUtil.createQualifiedObjectName;
 import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.connector.ConnectorCapabilities.NOT_NULL_COLUMN_CONSTRAINT;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.NodeUtils.mapFromProperties;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.DUPLICATE_COLUMN_NAME;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MISSING_CATALOG;
@@ -177,7 +177,7 @@ public class CreateTableTask
             }
         }
 
-        accessControl.checkCanCreateTable(session.getRequiredTransactionId(), session.getIdentity(), tableName);
+        accessControl.checkCanCreateTable(session.getRequiredTransactionId(), session.getIdentity(), session.getAccessControlContext(), tableName);
 
         Map<String, Expression> sqlProperties = mapFromProperties(statement.getProperties());
         Map<String, Object> properties = metadata.getTablePropertyManager().getProperties(

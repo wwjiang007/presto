@@ -13,18 +13,23 @@
  */
 package com.facebook.presto.sql.analyzer;
 
+import com.facebook.airlift.configuration.ConfigurationFactory;
+import com.facebook.airlift.configuration.testing.ConfigAssertions;
 import com.facebook.presto.operator.aggregation.arrayagg.ArrayAggGroupImplementation;
 import com.facebook.presto.operator.aggregation.histogram.HistogramGroupImplementation;
 import com.facebook.presto.operator.aggregation.multimapagg.MultimapAggGroupImplementation;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.PartitioningPrecisionStrategy;
 import com.google.common.collect.ImmutableMap;
-import io.airlift.configuration.ConfigurationFactory;
-import io.airlift.configuration.testing.ConfigAssertions;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import org.testng.annotations.Test;
 
 import java.util.Map;
 
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.AggregationPartitioningMergingStrategy.LEGACY;
+import static com.facebook.presto.sql.analyzer.FeaturesConfig.AggregationPartitioningMergingStrategy.TOP_DOWN;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.BROADCAST;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType.PARTITIONED;
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
@@ -34,8 +39,6 @@ import static com.facebook.presto.sql.analyzer.FeaturesConfig.SPILLER_SPILL_PATH
 import static com.facebook.presto.sql.analyzer.FeaturesConfig.SPILL_ENABLED;
 import static com.facebook.presto.sql.analyzer.RegexLibrary.JONI;
 import static com.facebook.presto.sql.analyzer.RegexLibrary.RE2J;
-import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
-import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -54,11 +57,16 @@ public class TestFeaturesConfig
                 .setDistributedIndexJoinsEnabled(false)
                 .setJoinDistributionType(PARTITIONED)
                 .setJoinMaxBroadcastTableSize(null)
-                .setGroupedExecutionForAggregationEnabled(false)
-                .setDynamicScheduleForGroupedExecutionEnabled(false)
+                .setGroupedExecutionForAggregationEnabled(true)
+                .setGroupedExecutionForJoinEnabled(true)
+                .setDynamicScheduleForGroupedExecutionEnabled(true)
+                .setGroupedExecutionEnabled(true)
+                .setRecoverableGroupedExecutionEnabled(false)
+                .setMaxFailedTaskPercentage(0.3)
+                .setMaxStageRetries(0)
                 .setConcurrentLifespansPerTask(0)
                 .setFastInequalityJoins(true)
-                .setColocatedJoinsEnabled(false)
+                .setColocatedJoinsEnabled(true)
                 .setSpatialJoinsEnabled(true)
                 .setJoinReorderingStrategy(ELIMINATE_CROSS_JOINS)
                 .setPartialMergePushdownStrategy(FeaturesConfig.PartialMergePushdownStrategy.NONE)
@@ -66,10 +74,12 @@ public class TestFeaturesConfig
                 .setRedistributeWrites(true)
                 .setScaleWriters(false)
                 .setWriterMinSize(new DataSize(32, MEGABYTE))
+                .setOptimizedScaleWriterProducerBuffer(false)
                 .setOptimizeMetadataQueries(false)
                 .setOptimizeHashGeneration(true)
                 .setPushTableWriteThroughUnion(true)
                 .setDictionaryAggregation(false)
+                .setAggregationPartitioningMergingStrategy(LEGACY)
                 .setLegacyArrayAgg(false)
                 .setGroupByUsesEqualTo(false)
                 .setLegacyMapSubscript(false)
@@ -87,7 +97,12 @@ public class TestFeaturesConfig
                 .setLegacyLogFunction(false)
                 .setIterativeOptimizerEnabled(true)
                 .setIterativeOptimizerTimeout(new Duration(3, MINUTES))
+                .setRuntimeOptimizerEnabled(false)
+                .setEnableDynamicFiltering(false)
+                .setDynamicFilteringMaxPerDriverRowCount(100)
+                .setDynamicFilteringMaxPerDriverSize(new DataSize(10, KILOBYTE))
                 .setEnableStatsCalculator(true)
+                .setEnableStatsCollectionForTemporaryTable(false)
                 .setIgnoreStatsCalculatorFailures(true)
                 .setPrintStatsForNonJoinQuery(false)
                 .setDefaultFilterFactorEnabled(false)
@@ -95,6 +110,7 @@ public class TestFeaturesConfig
                 .setLegacyTimestamp(true)
                 .setLegacyRowFieldOrdinalAccess(false)
                 .setLegacyCharToVarcharCoercion(false)
+                .setLegacyDateTimestampToVarcharCoercion(false)
                 .setEnableIntermediateAggregations(false)
                 .setPushAggregationThroughJoin(true)
                 .setParseDecimalLiteralsAsDouble(false)
@@ -112,7 +128,23 @@ public class TestFeaturesConfig
                 .setMaxGroupingSets(2048)
                 .setLegacyUnnestArrayRows(false)
                 .setJsonSerdeCodeGenerationEnabled(false)
-                .setPushLimitThroughOuterJoin(true));
+                .setPushLimitThroughOuterJoin(true)
+                .setMaxConcurrentMaterializations(3)
+                .setPushdownSubfieldsEnabled(false)
+                .setPushdownDereferenceEnabled(false)
+                .setTableWriterMergeOperatorEnabled(true)
+                .setOptimizeFullOuterJoinWithCoalesce(true)
+                .setIndexLoaderTimeout(new Duration(20, SECONDS))
+                .setOptimizedRepartitioningEnabled(false)
+                .setListBuiltInFunctionsOnly(true)
+                .setPartitioningPrecisionStrategy(PartitioningPrecisionStrategy.AUTOMATIC)
+                .setExperimentalFunctionsEnabled(false)
+                .setUseLegacyScheduler(true)
+                .setOptimizeCommonSubExpressions(true)
+                .setPreferDistributedUnion(true)
+                .setOptimizeNullsInJoin(false)
+                .setWarnOnNoTableLayoutFilter("")
+                .setInlineSqlFunctions(true));
     }
 
     @Test
@@ -124,7 +156,12 @@ public class TestFeaturesConfig
                 .put("network-cost-weight", "0.2")
                 .put("experimental.iterative-optimizer-enabled", "false")
                 .put("experimental.iterative-optimizer-timeout", "10s")
+                .put("experimental.runtime-optimizer-enabled", "true")
+                .put("experimental.enable-dynamic-filtering", "true")
+                .put("experimental.dynamic-filtering-max-per-driver-row-count", "256")
+                .put("experimental.dynamic-filtering-max-per-driver-size", "64kB")
                 .put("experimental.enable-stats-calculator", "false")
+                .put("experimental.enable-stats-collection-for-temporary-table", "true")
                 .put("optimizer.ignore-stats-calculator-failures", "false")
                 .put("print-stats-for-non-join-query", "true")
                 .put("optimizer.default-filter-factor-enabled", "true")
@@ -134,14 +171,20 @@ public class TestFeaturesConfig
                 .put("deprecated.legacy-map-subscript", "true")
                 .put("deprecated.legacy-row-field-ordinal-access", "true")
                 .put("deprecated.legacy-char-to-varchar-coercion", "true")
+                .put("deprecated.legacy-date-timestamp-to-varchar-coercion", "true")
                 .put("distributed-index-joins-enabled", "true")
                 .put("join-distribution-type", "BROADCAST")
                 .put("join-max-broadcast-table-size", "42GB")
-                .put("grouped-execution-for-aggregation-enabled", "true")
-                .put("dynamic-schedule-for-grouped-execution", "true")
+                .put("grouped-execution-for-aggregation-enabled", "false")
+                .put("grouped-execution-for-join-enabled", "false")
+                .put("grouped-execution-enabled", "false")
+                .put("dynamic-schedule-for-grouped-execution", "false")
+                .put("recoverable-grouped-execution-enabled", "true")
+                .put("max-failed-task-percentage", "0.8")
+                .put("max-stage-retries", "10")
                 .put("concurrent-lifespans-per-task", "1")
                 .put("fast-inequality-joins", "false")
-                .put("colocated-joins-enabled", "true")
+                .put("colocated-joins-enabled", "false")
                 .put("spatial-joins-enabled", "false")
                 .put("optimizer.join-reordering-strategy", "NONE")
                 .put("experimental.optimizer.partial-merge-pushdown-strategy", PUSH_THROUGH_LOW_MEMORY_OPERATORS.name())
@@ -149,12 +192,14 @@ public class TestFeaturesConfig
                 .put("redistribute-writes", "false")
                 .put("scale-writers", "true")
                 .put("writer-min-size", "42GB")
+                .put("optimized-scale-writer-producer-buffer", "true")
                 .put("optimizer.optimize-metadata-queries", "true")
                 .put("optimizer.optimize-hash-generation", "false")
                 .put("optimizer.optimize-mixed-distinct-aggregations", "true")
                 .put("optimizer.push-table-write-through-union", "false")
                 .put("optimizer.dictionary-aggregation", "true")
                 .put("optimizer.push-aggregation-through-join", "false")
+                .put("optimizer.aggregation-partition-merging", "top_down")
                 .put("regex-library", "RE2J")
                 .put("re2j.dfa-states-limit", "42")
                 .put("re2j.dfa-retries", "42")
@@ -184,6 +229,22 @@ public class TestFeaturesConfig
                 .put("deprecated.legacy-unnest-array-rows", "true")
                 .put("experimental.json-serde-codegen-enabled", "true")
                 .put("optimizer.push-limit-through-outer-join", "false")
+                .put("max-concurrent-materializations", "5")
+                .put("experimental.pushdown-subfields-enabled", "true")
+                .put("experimental.pushdown-dereference-enabled", "true")
+                .put("experimental.table-writer-merge-operator-enabled", "false")
+                .put("optimizer.optimize-full-outer-join-with-coalesce", "false")
+                .put("index-loader-timeout", "10s")
+                .put("experimental.optimized-repartitioning", "true")
+                .put("list-built-in-functions-only", "false")
+                .put("partitioning-precision-strategy", "PREFER_EXACT_PARTITIONING")
+                .put("experimental-functions-enabled", "true")
+                .put("use-legacy-scheduler", "false")
+                .put("optimize-common-sub-expressions", "false")
+                .put("prefer-distributed-union", "false")
+                .put("optimize-nulls-in-join", "true")
+                .put("warn-on-no-table-layout-filter", "ry@nlikestheyankees,ds")
+                .put("inline-sql-functions", "false")
                 .build();
 
         FeaturesConfig expected = new FeaturesConfig()
@@ -192,17 +253,27 @@ public class TestFeaturesConfig
                 .setNetworkCostWeight(0.2)
                 .setIterativeOptimizerEnabled(false)
                 .setIterativeOptimizerTimeout(new Duration(10, SECONDS))
+                .setRuntimeOptimizerEnabled(true)
+                .setEnableDynamicFiltering(true)
+                .setDynamicFilteringMaxPerDriverRowCount(256)
+                .setDynamicFilteringMaxPerDriverSize(new DataSize(64, KILOBYTE))
                 .setEnableStatsCalculator(false)
+                .setEnableStatsCollectionForTemporaryTable(true)
                 .setIgnoreStatsCalculatorFailures(false)
                 .setPrintStatsForNonJoinQuery(true)
                 .setDistributedIndexJoinsEnabled(true)
                 .setJoinDistributionType(BROADCAST)
                 .setJoinMaxBroadcastTableSize(new DataSize(42, GIGABYTE))
-                .setGroupedExecutionForAggregationEnabled(true)
-                .setDynamicScheduleForGroupedExecutionEnabled(true)
+                .setGroupedExecutionForAggregationEnabled(false)
+                .setGroupedExecutionForJoinEnabled(false)
+                .setGroupedExecutionEnabled(false)
+                .setDynamicScheduleForGroupedExecutionEnabled(false)
+                .setRecoverableGroupedExecutionEnabled(true)
+                .setMaxFailedTaskPercentage(0.8)
+                .setMaxStageRetries(10)
                 .setConcurrentLifespansPerTask(1)
                 .setFastInequalityJoins(false)
-                .setColocatedJoinsEnabled(true)
+                .setColocatedJoinsEnabled(false)
                 .setSpatialJoinsEnabled(false)
                 .setJoinReorderingStrategy(NONE)
                 .setPartialMergePushdownStrategy(PUSH_THROUGH_LOW_MEMORY_OPERATORS)
@@ -210,11 +281,13 @@ public class TestFeaturesConfig
                 .setRedistributeWrites(false)
                 .setScaleWriters(true)
                 .setWriterMinSize(new DataSize(42, GIGABYTE))
+                .setOptimizedScaleWriterProducerBuffer(true)
                 .setOptimizeMetadataQueries(true)
                 .setOptimizeHashGeneration(false)
                 .setOptimizeMixedDistinctAggregations(true)
                 .setPushTableWriteThroughUnion(false)
                 .setDictionaryAggregation(true)
+                .setAggregationPartitioningMergingStrategy(TOP_DOWN)
                 .setPushAggregationThroughJoin(false)
                 .setLegacyArrayAgg(true)
                 .setGroupByUsesEqualTo(true)
@@ -234,6 +307,7 @@ public class TestFeaturesConfig
                 .setLegacyTimestamp(false)
                 .setLegacyRowFieldOrdinalAccess(true)
                 .setLegacyCharToVarcharCoercion(true)
+                .setLegacyDateTimestampToVarcharCoercion(true)
                 .setEnableIntermediateAggregations(true)
                 .setParseDecimalLiteralsAsDouble(true)
                 .setForceSingleNodeOutput(false)
@@ -251,7 +325,23 @@ public class TestFeaturesConfig
                 .setLegacyUnnestArrayRows(true)
                 .setDefaultFilterFactorEnabled(true)
                 .setJsonSerdeCodeGenerationEnabled(true)
-                .setPushLimitThroughOuterJoin(false);
+                .setPushLimitThroughOuterJoin(false)
+                .setMaxConcurrentMaterializations(5)
+                .setPushdownSubfieldsEnabled(true)
+                .setPushdownDereferenceEnabled(true)
+                .setTableWriterMergeOperatorEnabled(false)
+                .setOptimizeFullOuterJoinWithCoalesce(false)
+                .setIndexLoaderTimeout(new Duration(10, SECONDS))
+                .setOptimizedRepartitioningEnabled(true)
+                .setListBuiltInFunctionsOnly(false)
+                .setPartitioningPrecisionStrategy(PartitioningPrecisionStrategy.PREFER_EXACT_PARTITIONING)
+                .setExperimentalFunctionsEnabled(true)
+                .setUseLegacyScheduler(false)
+                .setOptimizeCommonSubExpressions(false)
+                .setPreferDistributedUnion(false)
+                .setOptimizeNullsInJoin(true)
+                .setWarnOnNoTableLayoutFilter("ry@nlikestheyankees,ds")
+                .setInlineSqlFunctions(false);
         assertFullMapping(properties, expected);
     }
 

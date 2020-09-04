@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.teradata.functions;
 
-import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.airlift.concurrent.ThreadLocalCache;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.StandardTypes;
+import com.facebook.presto.common.type.TimeZoneKey;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.function.Description;
 import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.SqlType;
-import com.facebook.presto.spi.type.StandardTypes;
-import com.facebook.presto.spi.type.TimeZoneKey;
-import io.airlift.concurrent.ThreadLocalCache;
 import io.airlift.slice.Slice;
 import org.joda.time.DateTimeZone;
 import org.joda.time.chrono.ISOChronology;
@@ -28,13 +28,13 @@ import org.joda.time.format.DateTimeFormatter;
 
 import java.util.Locale;
 
+import static com.facebook.presto.common.type.DateTimeEncoding.unpackMillisUtc;
+import static com.facebook.presto.common.type.DateTimeEncoding.unpackZoneKey;
+import static com.facebook.presto.common.type.TimeZoneKey.MAX_TIME_ZONE_KEY;
+import static com.facebook.presto.common.type.TimeZoneKey.UTC_KEY;
+import static com.facebook.presto.common.type.TimeZoneKey.getTimeZoneKeys;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
-import static com.facebook.presto.spi.type.DateTimeEncoding.unpackMillisUtc;
-import static com.facebook.presto.spi.type.DateTimeEncoding.unpackZoneKey;
-import static com.facebook.presto.spi.type.TimeZoneKey.MAX_TIME_ZONE_KEY;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
-import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKeys;
 import static com.facebook.presto.teradata.functions.dateformat.DateFormatParser.createDateTimeFormatter;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static io.airlift.slice.Slices.utf8Slice;
@@ -63,13 +63,13 @@ public final class TeradataDateFunctions
     @ScalarFunction("to_char")
     @SqlType(StandardTypes.VARCHAR)
     public static Slice toChar(
-            ConnectorSession session,
+            SqlFunctionProperties properties,
             @SqlType(StandardTypes.TIMESTAMP_WITH_TIME_ZONE) long timestampWithTimeZone,
             @SqlType(StandardTypes.VARCHAR) Slice formatString)
     {
         DateTimeFormatter formatter = DATETIME_FORMATTER_CACHE.get(formatString)
                 .withChronology(CHRONOLOGIES[unpackZoneKey(timestampWithTimeZone).getKey()])
-                .withLocale(session.getLocale());
+                .withLocale(properties.getSessionLocale());
 
         return utf8Slice(formatter.print(unpackMillisUtc(timestampWithTimeZone)));
     }
@@ -77,10 +77,10 @@ public final class TeradataDateFunctions
     @Description("Converts a string to a DATE data type")
     @ScalarFunction("to_date")
     @SqlType(StandardTypes.DATE)
-    public static long toDate(ConnectorSession session, @SqlType(StandardTypes.VARCHAR) Slice dateTime, @SqlType(StandardTypes.VARCHAR) Slice formatString)
+    public static long toDate(SqlFunctionProperties properties, @SqlType(StandardTypes.VARCHAR) Slice dateTime, @SqlType(StandardTypes.VARCHAR) Slice formatString)
     {
         try {
-            long millis = parseMillis(UTC_KEY, session.getLocale(), dateTime, formatString);
+            long millis = parseMillis(UTC_KEY, properties.getSessionLocale(), dateTime, formatString);
             return MILLISECONDS.toDays(millis);
         }
         catch (Throwable t) {
@@ -94,20 +94,20 @@ public final class TeradataDateFunctions
     @ScalarFunction("to_timestamp")
     @SqlType(StandardTypes.TIMESTAMP)
     public static long toTimestamp(
-            ConnectorSession session,
+            SqlFunctionProperties properties,
             @SqlType(StandardTypes.VARCHAR) Slice dateTime,
             @SqlType(StandardTypes.VARCHAR) Slice formatString)
     {
-        return parseMillis(session, dateTime, formatString);
+        return parseMillis(properties, dateTime, formatString);
     }
 
-    private static long parseMillis(ConnectorSession session, Slice dateTime, Slice formatString)
+    private static long parseMillis(SqlFunctionProperties properties, Slice dateTime, Slice formatString)
     {
         TimeZoneKey timeZoneKey = UTC_KEY;
-        if (session.isLegacyTimestamp()) {
-            timeZoneKey = session.getTimeZoneKey();
+        if (properties.isLegacyTimestamp()) {
+            timeZoneKey = properties.getTimeZoneKey();
         }
-        return parseMillis(timeZoneKey, session.getLocale(), dateTime, formatString);
+        return parseMillis(timeZoneKey, properties.getSessionLocale(), dateTime, formatString);
     }
 
     private static long parseMillis(TimeZoneKey timeZoneKey, Locale locale, Slice dateTime, Slice formatString)

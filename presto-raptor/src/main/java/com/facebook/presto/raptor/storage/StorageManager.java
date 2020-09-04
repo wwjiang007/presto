@@ -13,10 +13,12 @@
  */
 package com.facebook.presto.raptor.storage;
 
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.hive.HdfsContext;
+import com.facebook.presto.hive.HiveFileContext;
 import com.facebook.presto.raptor.RaptorColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
-import com.facebook.presto.spi.predicate.TupleDomain;
-import com.facebook.presto.spi.type.Type;
 
 import java.util.List;
 import java.util.Map;
@@ -28,18 +30,38 @@ import java.util.UUID;
 public interface StorageManager
 {
     default ConnectorPageSource getPageSource(
+            HdfsContext hdfsContext,
+            HiveFileContext hiveFileContext,
             UUID shardUuid,
+            Optional<UUID> deltaShardUuid,
+            boolean tableSupportsDeltaDelete,
             OptionalInt bucketNumber,
             List<Long> columnIds,
             List<Type> columnTypes,
             TupleDomain<RaptorColumnHandle> effectivePredicate,
             ReaderAttributes readerAttributes)
     {
-        return getPageSource(shardUuid, bucketNumber, columnIds, columnTypes, effectivePredicate, readerAttributes, OptionalLong.empty(), Optional.empty());
+        return getPageSource(
+                hdfsContext,
+                hiveFileContext,
+                shardUuid,
+                deltaShardUuid,
+                tableSupportsDeltaDelete,
+                bucketNumber,
+                columnIds,
+                columnTypes,
+                effectivePredicate,
+                readerAttributes,
+                OptionalLong.empty(),
+                Optional.empty());
     }
 
     ConnectorPageSource getPageSource(
+            HdfsContext hdfsContext,
+            HiveFileContext hiveFileContext,
             UUID shardUuid,
+            Optional<UUID> deltaShardUuid,
+            boolean tableSupportsDeltaDelete,
             OptionalInt bucketNumber,
             List<Long> columnIds,
             List<Type> columnTypes,
@@ -49,6 +71,7 @@ public interface StorageManager
             Optional<Map<String, Type>> allColumnTypes);
 
     StoragePageSink createStoragePageSink(
+            HdfsContext hdfsContext,
             long transactionId,
             OptionalInt bucketNumber,
             List<Long> columnIds,

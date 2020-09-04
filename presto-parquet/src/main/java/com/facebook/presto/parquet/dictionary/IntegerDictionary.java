@@ -19,7 +19,6 @@ import org.apache.parquet.bytes.ByteBufferInputStream;
 import org.apache.parquet.column.values.plain.PlainValuesReader.IntegerPlainValuesReader;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 
@@ -33,12 +32,11 @@ public class IntegerDictionary
     {
         super(dictionaryPage.getEncoding());
         content = new int[dictionaryPage.getDictionarySize()];
-        IntegerPlainValuesReader intReader = new IntegerPlainValuesReader();
-        ByteBuffer byteBuffer = ByteBuffer.wrap(dictionaryPage.getSlice().getBytes());
-        ByteBufferInputStream inputStream = ByteBufferInputStream.wrap(ImmutableList.of(byteBuffer));
-        intReader.initFromPage(dictionaryPage.getDictionarySize(), inputStream);
+        IntegerPlainValuesReader reader = new IntegerPlainValuesReader();
+        ByteBufferInputStream inputStream = ByteBufferInputStream.wrap(ImmutableList.of(dictionaryPage.getSlice().toByteBuffer()));
+        reader.initFromPage(dictionaryPage.getDictionarySize(), inputStream);
         for (int i = 0; i < content.length; i++) {
-            content[i] = intReader.readInteger();
+            content[i] = reader.readInteger();
         }
     }
 

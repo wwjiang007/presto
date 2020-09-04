@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.hive.statistics;
 
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.hive.HiveBasicStatistics;
 import com.facebook.presto.hive.HiveClientConfig;
 import com.facebook.presto.hive.HiveColumnHandle;
@@ -20,20 +22,18 @@ import com.facebook.presto.hive.HivePartition;
 import com.facebook.presto.hive.HiveSessionProperties;
 import com.facebook.presto.hive.OrcFileWriterConfig;
 import com.facebook.presto.hive.ParquetFileWriterConfig;
-import com.facebook.presto.hive.PartitionStatistics;
 import com.facebook.presto.hive.metastore.DateStatistics;
 import com.facebook.presto.hive.metastore.DecimalStatistics;
 import com.facebook.presto.hive.metastore.DoubleStatistics;
 import com.facebook.presto.hive.metastore.HiveColumnStatistics;
 import com.facebook.presto.hive.metastore.IntegerStatistics;
+import com.facebook.presto.hive.metastore.PartitionStatistics;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.statistics.ColumnStatistics;
 import com.facebook.presto.spi.statistics.DoubleRange;
 import com.facebook.presto.spi.statistics.Estimate;
 import com.facebook.presto.spi.statistics.TableStatistics;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.TestingConnectorSession;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -46,6 +46,15 @@ import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.OptionalLong;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DecimalType.createDecimalType;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.PARTITION_KEY;
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CORRUPTED_COLUMN_STATISTICS;
@@ -60,6 +69,7 @@ import static com.facebook.presto.hive.metastore.HiveColumnStatistics.createDeci
 import static com.facebook.presto.hive.metastore.HiveColumnStatistics.createDoubleColumnStatistics;
 import static com.facebook.presto.hive.metastore.HiveColumnStatistics.createIntegerColumnStatistics;
 import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.calculateAverageRowsPerPartition;
+import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.calculateAverageSizePerPartition;
 import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.calculateDataSize;
 import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.calculateDataSizeForPartitioningKey;
 import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.calculateDistinctPartitionKeys;
@@ -72,15 +82,6 @@ import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvide
 import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.createDataColumnStatistics;
 import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.getPartitionsSample;
 import static com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider.validatePartitionStatistics;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static java.lang.Double.NaN;
 import static java.lang.String.format;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -248,6 +249,18 @@ public class TestMetastoreHiveStatisticsProvider
         assertEquals(calculateAverageRowsPerPartition(ImmutableList.of(rowsCount(10), PartitionStatistics.empty())), OptionalDouble.of(10));
         assertEquals(calculateAverageRowsPerPartition(ImmutableList.of(rowsCount(10), rowsCount(20))), OptionalDouble.of(15));
         assertEquals(calculateAverageRowsPerPartition(ImmutableList.of(rowsCount(10), rowsCount(20), PartitionStatistics.empty())), OptionalDouble.of(15));
+    }
+
+    @Test
+    public void testCalculateAverageSizePerPartition()
+    {
+        assertThat(calculateAverageSizePerPartition(ImmutableList.of())).isEmpty();
+        assertThat(calculateAverageSizePerPartition(ImmutableList.of(PartitionStatistics.empty()))).isEmpty();
+        assertThat(calculateAverageSizePerPartition(ImmutableList.of(PartitionStatistics.empty(), PartitionStatistics.empty()))).isEmpty();
+        assertEquals(calculateAverageSizePerPartition(ImmutableList.of(inMemorySize(10))), OptionalDouble.of(10));
+        assertEquals(calculateAverageSizePerPartition(ImmutableList.of(inMemorySize(10), PartitionStatistics.empty())), OptionalDouble.of(10));
+        assertEquals(calculateAverageSizePerPartition(ImmutableList.of(inMemorySize(10), inMemorySize(20))), OptionalDouble.of(15));
+        assertEquals(calculateAverageSizePerPartition(ImmutableList.of(inMemorySize(10), inMemorySize(20), PartitionStatistics.empty())), OptionalDouble.of(15));
     }
 
     @Test
@@ -606,7 +619,7 @@ public class TestMetastoreHiveStatisticsProvider
     {
         String partitionName = "p1=string1/p2=1234";
         PartitionStatistics statistics = PartitionStatistics.builder()
-                .setBasicStatistics(new HiveBasicStatistics(OptionalLong.empty(), OptionalLong.of(1000), OptionalLong.empty(), OptionalLong.empty()))
+                .setBasicStatistics(new HiveBasicStatistics(OptionalLong.empty(), OptionalLong.of(1000), OptionalLong.of(5000), OptionalLong.empty()))
                 .setColumnStatistics(ImmutableMap.of(COLUMN, createIntegerColumnStatistics(OptionalLong.of(-100), OptionalLong.of(100), OptionalLong.of(500), OptionalLong.of(300))))
                 .build();
         MetastoreHiveStatisticsProvider statisticsProvider = new MetastoreHiveStatisticsProvider((table, hivePartitions) -> ImmutableMap.of(partitionName, statistics));
@@ -614,6 +627,7 @@ public class TestMetastoreHiveStatisticsProvider
         HiveColumnHandle columnHandle = new HiveColumnHandle(COLUMN, HIVE_LONG, BIGINT.getTypeSignature(), 2, REGULAR, Optional.empty());
         TableStatistics expected = TableStatistics.builder()
                 .setRowCount(Estimate.of(1000))
+                .setTotalSize(Estimate.of(5000))
                 .setColumnStatistics(
                         PARTITION_COLUMN_1,
                         ColumnStatistics.builder()
@@ -656,7 +670,7 @@ public class TestMetastoreHiveStatisticsProvider
     public void testGetTableStatisticsUnpartitioned()
     {
         PartitionStatistics statistics = PartitionStatistics.builder()
-                .setBasicStatistics(new HiveBasicStatistics(OptionalLong.empty(), OptionalLong.of(1000), OptionalLong.empty(), OptionalLong.empty()))
+                .setBasicStatistics(new HiveBasicStatistics(OptionalLong.empty(), OptionalLong.of(1000), OptionalLong.of(5000), OptionalLong.empty()))
                 .setColumnStatistics(ImmutableMap.of(COLUMN, createIntegerColumnStatistics(OptionalLong.of(-100), OptionalLong.of(100), OptionalLong.of(500), OptionalLong.of(300))))
                 .build();
         MetastoreHiveStatisticsProvider statisticsProvider = new MetastoreHiveStatisticsProvider((table, hivePartitions) -> ImmutableMap.of(UNPARTITIONED_ID, statistics));
@@ -664,6 +678,7 @@ public class TestMetastoreHiveStatisticsProvider
         HiveColumnHandle columnHandle = new HiveColumnHandle(COLUMN, HIVE_LONG, BIGINT.getTypeSignature(), 2, REGULAR, Optional.empty());
         TableStatistics expected = TableStatistics.builder()
                 .setRowCount(Estimate.of(1000))
+                .setTotalSize(Estimate.of(5000))
                 .setColumnStatistics(
                         columnHandle,
                         ColumnStatistics.builder()
@@ -781,6 +796,11 @@ public class TestMetastoreHiveStatisticsProvider
     private static PartitionStatistics rowsCount(long rowsCount)
     {
         return new PartitionStatistics(new HiveBasicStatistics(0, rowsCount, 0, 0), ImmutableMap.of());
+    }
+
+    private static PartitionStatistics inMemorySize(long inMemorySize)
+    {
+        return new PartitionStatistics(new HiveBasicStatistics(0, 0, inMemorySize, 0), ImmutableMap.of());
     }
 
     private static PartitionStatistics nullsCount(long nullsCount)

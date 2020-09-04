@@ -13,31 +13,33 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.BigintType;
+import com.facebook.presto.common.type.BooleanType;
+import com.facebook.presto.common.type.CharType;
+import com.facebook.presto.common.type.DateType;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Decimals;
+import com.facebook.presto.common.type.DoubleType;
+import com.facebook.presto.common.type.IntegerType;
+import com.facebook.presto.common.type.RealType;
+import com.facebook.presto.common.type.SmallintType;
+import com.facebook.presto.common.type.SqlDate;
+import com.facebook.presto.common.type.SqlTime;
+import com.facebook.presto.common.type.SqlTimestamp;
+import com.facebook.presto.common.type.SqlVarbinary;
+import com.facebook.presto.common.type.TimeType;
+import com.facebook.presto.common.type.TimestampType;
+import com.facebook.presto.common.type.TinyintType;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarbinaryType;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.operator.scalar.VarbinaryFunctions;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.relation.ConstantExpression;
-import com.facebook.presto.spi.type.BigintType;
-import com.facebook.presto.spi.type.BooleanType;
-import com.facebook.presto.spi.type.CharType;
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.Decimals;
-import com.facebook.presto.spi.type.DoubleType;
-import com.facebook.presto.spi.type.IntegerType;
-import com.facebook.presto.spi.type.RealType;
-import com.facebook.presto.spi.type.SmallintType;
-import com.facebook.presto.spi.type.SqlDate;
-import com.facebook.presto.spi.type.SqlTime;
-import com.facebook.presto.spi.type.SqlTimestamp;
-import com.facebook.presto.spi.type.SqlVarbinary;
-import com.facebook.presto.spi.type.TimeType;
-import com.facebook.presto.spi.type.TimestampType;
-import com.facebook.presto.spi.type.TinyintType;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarbinaryType;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.sql.InterpretedFunctionInvoker;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.tree.AstVisitor;
@@ -46,6 +48,7 @@ import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.CharLiteral;
 import com.facebook.presto.sql.tree.DecimalLiteral;
 import com.facebook.presto.sql.tree.DoubleLiteral;
+import com.facebook.presto.sql.tree.EnumLiteral;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.GenericLiteral;
 import com.facebook.presto.sql.tree.IntervalLiteral;
@@ -66,15 +69,15 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.MathContext;
 
+import static com.facebook.presto.common.type.Decimals.decodeUnscaledValue;
+import static com.facebook.presto.common.type.JsonType.JSON;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.metadata.CastType.CAST;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_USER_ERROR;
-import static com.facebook.presto.spi.type.Decimals.decodeUnscaledValue;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.INVALID_LITERAL;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.TYPE_MISMATCH;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
-import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.util.DateTimeUtils.parseDayTimeInterval;
 import static com.facebook.presto.util.DateTimeUtils.parseTimeLiteral;
 import static com.facebook.presto.util.DateTimeUtils.parseTimestampLiteral;
@@ -99,6 +102,7 @@ public final class LiteralInterpreter
     public static Object evaluate(ConnectorSession session, ConstantExpression node)
     {
         Type type = node.getType();
+        SqlFunctionProperties properties = session.getSqlFunctionProperties();
 
         if (node.getValue() == null) {
             return null;
@@ -136,15 +140,15 @@ public final class LiteralInterpreter
             return new SqlDate(((Long) node.getValue()).intValue());
         }
         if (type instanceof TimeType) {
-            if (session.isLegacyTimestamp()) {
-                return new SqlTime((long) node.getValue(), session.getTimeZoneKey());
+            if (properties.isLegacyTimestamp()) {
+                return new SqlTime((long) node.getValue(), properties.getTimeZoneKey());
             }
             return new SqlTime((long) node.getValue());
         }
         if (type instanceof TimestampType) {
             try {
-                if (session.isLegacyTimestamp()) {
-                    return new SqlTimestamp((long) node.getValue(), session.getTimeZoneKey());
+                if (properties.isLegacyTimestamp()) {
+                    return new SqlTimestamp((long) node.getValue(), properties.getTimeZoneKey());
                 }
                 return new SqlTimestamp((long) node.getValue());
             }
@@ -156,7 +160,11 @@ public final class LiteralInterpreter
             return new SqlIntervalDayTime((long) node.getValue());
         }
         if (type instanceof IntervalYearMonthType) {
-            return new SqlIntervalYearMonth((int) node.getValue());
+            return new SqlIntervalYearMonth(((Long) node.getValue()).intValue());
+        }
+        if (type.getJavaType().equals(Slice.class)) {
+            // DO NOT ever remove toBase64. Calling toString directly on Slice whose base is not byte[] will cause JVM to crash.
+            return "'" + VarbinaryFunctions.toBase64((Slice) node.getValue()).toStringUtf8() + "'";
         }
 
         // We should not fail at the moment; just return the raw value (block, regex, etc) to the user
@@ -229,6 +237,12 @@ public final class LiteralInterpreter
         }
 
         @Override
+        protected Object visitEnumLiteral(EnumLiteral node, ConnectorSession context)
+        {
+            return node.getValue();
+        }
+
+        @Override
         protected Object visitGenericLiteral(GenericLiteral node, ConnectorSession session)
         {
             Type type = metadata.getType(parseTypeSignature(node.getType()));
@@ -238,12 +252,12 @@ public final class LiteralInterpreter
 
             if (JSON.equals(type)) {
                 FunctionHandle functionHandle = metadata.getFunctionManager().lookupFunction("json_parse", fromTypes(VARCHAR));
-                return functionInvoker.invoke(functionHandle, session, ImmutableList.of(utf8Slice(node.getValue())));
+                return functionInvoker.invoke(functionHandle, session.getSqlFunctionProperties(), ImmutableList.of(utf8Slice(node.getValue())));
             }
 
             try {
                 FunctionHandle functionHandle = metadata.getFunctionManager().lookupCast(CAST, VARCHAR.getTypeSignature(), type.getTypeSignature());
-                return functionInvoker.invoke(functionHandle, session, ImmutableList.of(utf8Slice(node.getValue())));
+                return functionInvoker.invoke(functionHandle, session.getSqlFunctionProperties(), ImmutableList.of(utf8Slice(node.getValue())));
             }
             catch (IllegalArgumentException e) {
                 throw new SemanticException(TYPE_MISMATCH, node, "No literal form for type %s", type);
@@ -253,8 +267,10 @@ public final class LiteralInterpreter
         @Override
         protected Long visitTimeLiteral(TimeLiteral node, ConnectorSession session)
         {
-            if (session.isLegacyTimestamp()) {
-                return parseTimeLiteral(session.getTimeZoneKey(), node.getValue());
+            SqlFunctionProperties properties = session.getSqlFunctionProperties();
+
+            if (properties.isLegacyTimestamp()) {
+                return parseTimeLiteral(properties.getTimeZoneKey(), node.getValue());
             }
             else {
                 return parseTimeLiteral(node.getValue());
@@ -264,9 +280,11 @@ public final class LiteralInterpreter
         @Override
         protected Long visitTimestampLiteral(TimestampLiteral node, ConnectorSession session)
         {
+            SqlFunctionProperties properties = session.getSqlFunctionProperties();
+
             try {
-                if (session.isLegacyTimestamp()) {
-                    return parseTimestampLiteral(session.getTimeZoneKey(), node.getValue());
+                if (properties.isLegacyTimestamp()) {
+                    return parseTimestampLiteral(properties.getTimeZoneKey(), node.getValue());
                 }
                 else {
                     return parseTimestampLiteral(node.getValue());

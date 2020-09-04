@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.sql.gen;
 
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.PageBuilder;
+import com.facebook.presto.common.type.StandardTypes;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.project.PageProcessor;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.relation.RowExpression;
-import com.facebook.presto.spi.type.StandardTypes;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slices;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -44,12 +44,12 @@ import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IN;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.field;
 import static com.facebook.presto.sql.relational.Expressions.specialForm;
@@ -127,7 +127,7 @@ public class InCodeGeneratorBenchmark
         RowExpression filter = specialForm(IN, BOOLEAN, arguments);
 
         MetadataManager metadata = MetadataManager.createTestMetadataManager();
-        processor = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0)).compilePageProcessor(Optional.of(filter), ImmutableList.of(project)).get();
+        processor = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0)).compilePageProcessor(SESSION.getSqlFunctionProperties(), Optional.of(filter), ImmutableList.of(project)).get();
     }
 
     @Benchmark
@@ -135,7 +135,7 @@ public class InCodeGeneratorBenchmark
     {
         return ImmutableList.copyOf(
                 processor.process(
-                        SESSION,
+                        SESSION.getSqlFunctionProperties(),
                         new DriverYieldSignal(),
                         newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
                         inputPage));

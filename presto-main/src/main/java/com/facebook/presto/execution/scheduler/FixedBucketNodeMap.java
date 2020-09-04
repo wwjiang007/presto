@@ -28,11 +28,14 @@ public class FixedBucketNodeMap
         extends BucketNodeMap
 {
     private final List<InternalNode> bucketToNode;
+    private final boolean cacheable;
 
-    public FixedBucketNodeMap(ToIntFunction<Split> splitToBucket, List<InternalNode> bucketToNode)
+    public FixedBucketNodeMap(ToIntFunction<Split> splitToBucket, List<InternalNode> bucketToNode, boolean cacheable)
     {
         super(splitToBucket);
+        requireNonNull(bucketToNode, "bucketToNode is null");
         this.bucketToNode = ImmutableList.copyOf(requireNonNull(bucketToNode, "bucketToNode is null"));
+        this.cacheable = cacheable;
     }
 
     @Override
@@ -42,13 +45,19 @@ public class FixedBucketNodeMap
     }
 
     @Override
+    public boolean isBucketCacheable(int bucketedId)
+    {
+        return cacheable;
+    }
+
+    @Override
     public int getBucketCount()
     {
         return bucketToNode.size();
     }
 
     @Override
-    public void assignBucketToNode(int bucketedId, InternalNode node)
+    public void assignOrUpdateBucketToNode(int bucketedId, InternalNode node, boolean cacheable)
     {
         throw new UnsupportedOperationException();
     }
@@ -59,8 +68,15 @@ public class FixedBucketNodeMap
         return false;
     }
 
-    public List<InternalNode> getBucketToNode()
+    @Override
+    public boolean hasInitialMap()
     {
-        return bucketToNode;
+        return true;
+    }
+
+    @Override
+    public Optional<List<InternalNode>> getBucketToNode()
+    {
+        return Optional.of(bucketToNode);
     }
 }

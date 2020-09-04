@@ -15,6 +15,9 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.RowPagesBuilder;
+import com.facebook.presto.Session;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskStateMachine;
@@ -27,15 +30,14 @@ import com.facebook.presto.operator.exchange.LocalExchangeSinkOperator.LocalExch
 import com.facebook.presto.operator.exchange.LocalExchangeSourceOperator.LocalExchangeSourceOperatorFactory;
 import com.facebook.presto.operator.index.PageBuffer;
 import com.facebook.presto.operator.index.PageBufferOperator.PageBufferOperatorFactory;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.GenericPartitioningSpillerFactory;
 import com.facebook.presto.spiller.PartitioningSpillerFactory;
 import com.facebook.presto.spiller.SingleStreamSpiller;
 import com.facebook.presto.spiller.SingleStreamSpillerFactory;
 import com.facebook.presto.sql.gen.JoinFilterFunctionCompiler.JoinFilterFunctionFactory;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.sql.planner.PartitioningProviderManager;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.TestingTaskContext;
 import com.google.common.collect.ImmutableList;
@@ -68,16 +70,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 
+import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
+import static com.facebook.airlift.testing.Assertions.assertEqualsIgnoreOrder;
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.operator.OperatorAssertion.assertOperatorEquals;
 import static com.facebook.presto.operator.OperatorAssertion.dropChannel;
 import static com.facebook.presto.operator.OperatorAssertion.without;
 import static com.facebook.presto.operator.PipelineExecutionStrategy.UNGROUPED_EXECUTION;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.testing.assertions.Assert.assertEquals;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -85,10 +91,8 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterators.unmodifiableIterator;
 import static com.google.common.util.concurrent.Futures.immediateFailedFuture;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
-import static io.airlift.testing.Assertions.assertEqualsIgnoreOrder;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.nCopies;
@@ -112,6 +116,8 @@ public class TestHashJoinOperator
 
     private ExecutorService executor;
     private ScheduledExecutorService scheduledExecutor;
+    private PartitioningProviderManager partitioningProviderManager;
+    private Session session;
 
     @BeforeMethod
     public void setUp()
@@ -131,6 +137,8 @@ public class TestHashJoinOperator
                 daemonThreadsNamed("test-executor-%s"),
                 new ThreadPoolExecutor.DiscardPolicy());
         scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
+        partitioningProviderManager = new PartitioningProviderManager();
+        session = testSessionBuilder().build();
     }
 
     @AfterMethod(alwaysRun = true)
@@ -138,6 +146,8 @@ public class TestHashJoinOperator
     {
         executor.shutdownNow();
         scheduledExecutor.shutdownNow();
+        partitioningProviderManager = null;
+        session = null;
     }
 
     @DataProvider(name = "hashJoinTestValues")
@@ -362,7 +372,7 @@ public class TestHashJoinOperator
     private void innerJoinWithSpill(boolean probeHashEnabled, List<WhenSpill> whenSpill, SingleStreamSpillerFactory buildSpillerFactory, PartitioningSpillerFactory joinSpillerFactory)
             throws Exception
     {
-        TaskStateMachine taskStateMachine = new TaskStateMachine(new TaskId("query", 0, 0), executor);
+        TaskStateMachine taskStateMachine = new TaskStateMachine(new TaskId("query", 0, 0, 0), executor);
         TaskContext taskContext = TestingTaskContext.createTaskContext(executor, scheduledExecutor, TEST_SESSION, taskStateMachine);
 
         DriverContext joinDriverContext = taskContext.addPipelineContext(2, true, true, false).addDriverContext();
@@ -1024,6 +1034,19 @@ public class TestHashJoinOperator
         buildLookupSource(buildSideSetup);
     }
 
+    @Test(expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Query exceeded per-node broadcast memory limit of.*", dataProvider = "testMemoryLimitProvider")
+    public void testBroadcastMemoryLimit(boolean parallelBuild, boolean buildHashEnabled)
+    {
+        TaskContext taskContext = TestingTaskContext.createTaskContext(executor, scheduledExecutor, TEST_SESSION, new DataSize(100, MEGABYTE));
+        taskContext.getQueryContext().setMemoryLimits(new DataSize(512, MEGABYTE), new DataSize(512, MEGABYTE), new DataSize(100, BYTE));
+        RowPagesBuilder buildPages = rowPagesBuilder(buildHashEnabled, Ints.asList(0), ImmutableList.of(VARCHAR, BIGINT, BIGINT))
+                .addSequencePage(10, 20, 30, 40);
+        BuildSideSetup buildSideSetup = setupBuildSide(parallelBuild, taskContext, Ints.asList(0),
+                buildPages, Optional.empty(), false, SINGLE_STREAM_SPILLER_FACTORY, true);
+        instantiateBuildDrivers(buildSideSetup, taskContext);
+        buildLookupSource(buildSideSetup);
+    }
+
     @Test(dataProvider = "hashJoinTestValues")
     public void testInnerJoinWithEmptyLookupSource(boolean parallelBuild, boolean probeHashEnabled, boolean buildHashEnabled)
     {
@@ -1289,11 +1312,27 @@ public class TestHashJoinOperator
             boolean spillEnabled,
             SingleStreamSpillerFactory singleStreamSpillerFactory)
     {
+        return setupBuildSide(parallelBuild, taskContext, hashChannels, buildPages,
+                filterFunction, spillEnabled, singleStreamSpillerFactory, false);
+    }
+
+    private BuildSideSetup setupBuildSide(
+            boolean parallelBuild,
+            TaskContext taskContext,
+            List<Integer> hashChannels,
+            RowPagesBuilder buildPages,
+            Optional<InternalJoinFilterFunction> filterFunction,
+            boolean spillEnabled,
+            SingleStreamSpillerFactory singleStreamSpillerFactory,
+            boolean enforceBroadcastMemoryLimit)
+    {
         Optional<JoinFilterFunctionFactory> filterFunctionFactory = filterFunction
                 .map(function -> (session, addresses, pages) -> new StandardJoinFilterFunction(function, addresses, pages));
 
         int partitionCount = parallelBuild ? PARTITION_COUNT : 1;
         LocalExchangeFactory localExchangeFactory = new LocalExchangeFactory(
+                partitioningProviderManager,
+                session,
                 FIXED_HASH_DISTRIBUTION,
                 partitionCount,
                 buildPages.getTypes(),
@@ -1346,7 +1385,8 @@ public class TestHashJoinOperator
                 100,
                 new PagesIndex.TestingFactory(false),
                 spillEnabled,
-                singleStreamSpillerFactory);
+                singleStreamSpillerFactory,
+                enforceBroadcastMemoryLimit);
         return new BuildSideSetup(lookupSourceFactoryManager, buildOperatorFactory, sourceOperatorFactory, partitionCount);
     }
 

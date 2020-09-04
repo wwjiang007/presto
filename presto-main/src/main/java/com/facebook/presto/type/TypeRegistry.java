@@ -13,22 +13,23 @@
  */
 package com.facebook.presto.type;
 
+import com.facebook.presto.common.function.OperatorType;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.CharType;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.ParametricType;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.StandardTypes;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.common.type.TypeParameter;
+import com.facebook.presto.common.type.TypeSignature;
+import com.facebook.presto.common.type.TypeSignatureParameter;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.spi.function.OperatorType;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.CharType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.ParametricType;
-import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.StandardTypes;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeParameter;
-import com.facebook.presto.spi.type.TypeSignature;
-import com.facebook.presto.spi.type.TypeSignatureParameter;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
+import com.facebook.presto.type.khyperloglog.KHyperLogLogType;
 import com.facebook.presto.type.setdigest.SetDigestType;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.cache.CacheBuilder;
@@ -51,27 +52,29 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.CharType.createCharType;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.HyperLogLogType.HYPER_LOG_LOG;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.P4HyperLogLogType.P4_HYPER_LOG_LOG;
-import static com.facebook.presto.spi.type.QuantileDigestParametricType.QDIGEST;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.RowType.Field;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TimeType.TIME;
-import static com.facebook.presto.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
-import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
-import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.CharType.createCharType;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DecimalType.createDecimalType;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.HyperLogLogType.HYPER_LOG_LOG;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.JsonType.JSON;
+import static com.facebook.presto.common.type.P4HyperLogLogType.P4_HYPER_LOG_LOG;
+import static com.facebook.presto.common.type.QuantileDigestParametricType.QDIGEST;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.RowType.Field;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TDigestParametricType.TDIGEST;
+import static com.facebook.presto.common.type.TimeType.TIME;
+import static com.facebook.presto.common.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.VarcharType.createUnboundedVarcharType;
+import static com.facebook.presto.common.type.VarcharType.createVarcharType;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.type.ArrayParametricType.ARRAY;
 import static com.facebook.presto.type.CodePointsType.CODE_POINTS;
@@ -80,14 +83,15 @@ import static com.facebook.presto.type.FunctionParametricType.FUNCTION;
 import static com.facebook.presto.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
 import static com.facebook.presto.type.IntervalYearMonthType.INTERVAL_YEAR_MONTH;
 import static com.facebook.presto.type.IpAddressType.IPADDRESS;
+import static com.facebook.presto.type.IpPrefixType.IPPREFIX;
 import static com.facebook.presto.type.JoniRegexpType.JONI_REGEXP;
 import static com.facebook.presto.type.JsonPathType.JSON_PATH;
-import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.type.LikePatternType.LIKE_PATTERN;
 import static com.facebook.presto.type.MapParametricType.MAP;
 import static com.facebook.presto.type.Re2JRegexpType.RE2J_REGEXP;
 import static com.facebook.presto.type.RowParametricType.ROW;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
+import static com.facebook.presto.type.khyperloglog.KHyperLogLogType.K_HYPER_LOG_LOG;
 import static com.facebook.presto.type.setdigest.SetDigestType.SET_DIGEST;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -139,6 +143,7 @@ public final class TypeRegistry
         addType(INTERVAL_DAY_TIME);
         addType(HYPER_LOG_LOG);
         addType(SET_DIGEST);
+        addType(K_HYPER_LOG_LOG);
         addType(P4_HYPER_LOG_LOG);
         addType(JONI_REGEXP);
         addType(RE2J_REGEXP);
@@ -148,6 +153,7 @@ public final class TypeRegistry
         addType(JSON);
         addType(CODE_POINTS);
         addType(IPADDRESS);
+        addType(IPPREFIX);
         addParametricType(VarcharParametricType.VARCHAR);
         addParametricType(CharParametricType.CHAR);
         addParametricType(DecimalParametricType.DECIMAL);
@@ -156,6 +162,7 @@ public final class TypeRegistry
         addParametricType(MAP);
         addParametricType(FUNCTION);
         addParametricType(QDIGEST);
+        addParametricType(TDIGEST);
 
         for (Type type : types) {
             addType(type);
@@ -295,6 +302,17 @@ public final class TypeRegistry
 
         String fromTypeBaseName = fromType.getTypeSignature().getBase();
         String toTypeBaseName = toType.getTypeSignature().getBase();
+
+        if (featuresConfig.isLegacyDateTimestampToVarcharCoercion()) {
+            if ((fromTypeBaseName.equals(StandardTypes.DATE) || fromTypeBaseName.equals(StandardTypes.TIMESTAMP)) && toTypeBaseName.equals(StandardTypes.VARCHAR)) {
+                return TypeCompatibility.compatible(toType, true);
+            }
+
+            if (fromTypeBaseName.equals(StandardTypes.VARCHAR) && (toTypeBaseName.equals(StandardTypes.DATE) || toTypeBaseName.equals(StandardTypes.TIMESTAMP))) {
+                return TypeCompatibility.compatible(fromType, true);
+            }
+        }
+
         if (fromTypeBaseName.equals(toTypeBaseName)) {
             if (fromTypeBaseName.equals(StandardTypes.DECIMAL)) {
                 Type commonSuperType = getCommonSuperTypeForDecimal((DecimalType) fromType, (DecimalType) toType);
@@ -465,6 +483,7 @@ public final class TypeRegistry
                     case StandardTypes.JSON:
                     case StandardTypes.INTERVAL_YEAR_TO_MONTH:
                     case StandardTypes.INTERVAL_DAY_TO_SECOND:
+                    case KHyperLogLogType.NAME:
                     case JoniRegexpType.NAME:
                     case LikePatternType.NAME:
                     case JsonPathType.NAME:
@@ -663,7 +682,7 @@ public final class TypeRegistry
     public MethodHandle resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
     {
         requireNonNull(functionManager, "functionManager is null");
-        return functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(operatorType, fromTypes(argumentTypes))).getMethodHandle();
+        return functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(operatorType, fromTypes(argumentTypes))).getMethodHandle();
     }
 
     public static class TypeCompatibility

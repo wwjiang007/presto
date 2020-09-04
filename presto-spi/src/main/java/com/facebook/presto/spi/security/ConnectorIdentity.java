@@ -14,8 +14,12 @@
 package com.facebook.presto.spi.security;
 
 import java.security.Principal;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
+import static java.util.Collections.emptyMap;
+import static java.util.Collections.unmodifiableMap;
 import static java.util.Objects.requireNonNull;
 
 public class ConnectorIdentity
@@ -23,12 +27,26 @@ public class ConnectorIdentity
     private final String user;
     private final Optional<Principal> principal;
     private final Optional<SelectedRole> role;
+    private final Map<String, String> extraCredentials;
+    private final Map<String, TokenAuthenticator> extraAuthenticators;
 
     public ConnectorIdentity(String user, Optional<Principal> principal, Optional<SelectedRole> role)
+    {
+        this(user, principal, role, emptyMap(), emptyMap());
+    }
+
+    public ConnectorIdentity(
+            String user,
+            Optional<Principal> principal,
+            Optional<SelectedRole> role,
+            Map<String, String> extraCredentials,
+            Map<String, TokenAuthenticator> extraAuthenticators)
     {
         this.user = requireNonNull(user, "user is null");
         this.principal = requireNonNull(principal, "principal is null");
         this.role = requireNonNull(role, "role is null");
+        this.extraCredentials = unmodifiableMap(new HashMap<>(requireNonNull(extraCredentials, "extraCredentials is null")));
+        this.extraAuthenticators = unmodifiableMap(new HashMap<>(requireNonNull(extraAuthenticators, "extraAuthenticators is null")));
     }
 
     public String getUser()
@@ -46,18 +64,14 @@ public class ConnectorIdentity
         return role;
     }
 
-    @Override
-    public boolean equals(Object o)
+    public Map<String, String> getExtraCredentials()
     {
-        // TODO: remove equals completely after a few months
-        throw new UnsupportedOperationException();
+        return extraCredentials;
     }
 
-    @Override
-    public int hashCode()
+    public Map<String, TokenAuthenticator> getExtraAuthenticators()
     {
-        // TODO remove hashCode completely after a few months
-        throw new UnsupportedOperationException();
+        return extraAuthenticators;
     }
 
     @Override
@@ -67,6 +81,8 @@ public class ConnectorIdentity
         sb.append("user='").append(user).append('\'');
         principal.ifPresent(principal -> sb.append(", principal=").append(principal));
         role.ifPresent(role -> sb.append(", role=").append(role));
+        sb.append(", extraCredentials=").append(extraCredentials.keySet());
+        sb.append(", extraAuthenticators=").append(extraAuthenticators.keySet());
         sb.append('}');
         return sb.toString();
     }

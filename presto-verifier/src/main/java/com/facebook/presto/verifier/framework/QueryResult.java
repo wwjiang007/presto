@@ -13,9 +13,10 @@
  */
 package com.facebook.presto.verifier.framework;
 
-import com.facebook.presto.jdbc.QueryStats;
+import com.facebook.presto.verifier.prestoaction.QueryActionStats;
 import com.google.common.collect.ImmutableList;
 
+import java.sql.ResultSetMetaData;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -23,14 +24,14 @@ import static java.util.Objects.requireNonNull;
 public class QueryResult<R>
 {
     private final List<R> results;
-    private final List<String> columnNames;
-    private final QueryStats queryStats;
+    private final ResultSetMetaData metadata;
+    private final QueryActionStats queryActionStats;
 
-    public QueryResult(List<R> results, List<String> columnNames, QueryStats queryStats)
+    public QueryResult(List<R> results, ResultSetMetaData metadata, QueryActionStats queryActionStats)
     {
         this.results = ImmutableList.copyOf(results);
-        this.columnNames = requireNonNull(columnNames, "columnNames is null");
-        this.queryStats = requireNonNull(queryStats, "queryStats is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.queryActionStats = requireNonNull(queryActionStats, "queryStats is null");
     }
 
     public List<R> getResults()
@@ -38,13 +39,13 @@ public class QueryResult<R>
         return results;
     }
 
-    public List<String> getColumnNames()
+    public ResultSetMetaData getMetadata()
     {
-        return columnNames;
+        return metadata;
     }
 
-    public QueryStats getQueryStats()
+    public QueryActionStats getQueryActionStats()
     {
-        return queryStats;
+        return queryActionStats;
     }
 }

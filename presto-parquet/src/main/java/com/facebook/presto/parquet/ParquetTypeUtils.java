@@ -13,8 +13,10 @@
  */
 package com.facebook.presto.parquet;
 
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.common.Subfield;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Type;
+import com.google.common.collect.ImmutableList;
 import org.apache.parquet.column.Encoding;
 import org.apache.parquet.io.ColumnIO;
 import org.apache.parquet.io.ColumnIOFactory;
@@ -24,6 +26,7 @@ import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.ParquetDecodingException;
 import org.apache.parquet.io.PrimitiveColumnIO;
 import org.apache.parquet.schema.DecimalMetadata;
+import org.apache.parquet.schema.GroupType;
 import org.apache.parquet.schema.MessageType;
 
 import java.util.Arrays;
@@ -34,6 +37,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.Iterables.getOnlyElement;
+import static java.util.stream.Collectors.joining;
 import static org.apache.parquet.schema.OriginalType.DECIMAL;
 import static org.apache.parquet.schema.Type.Repetition.REPEATED;
 
@@ -184,7 +189,7 @@ public final class ParquetTypeUtils
         }
     }
 
-    public static org.apache.parquet.schema.Type getParquetTypeByName(String columnName, MessageType messageType)
+    public static org.apache.parquet.schema.Type getParquetTypeByName(String columnName, GroupType messageType)
     {
         if (messageType.containsField(columnName)) {
             return messageType.getType(columnName);
@@ -260,5 +265,66 @@ public final class ParquetTypeUtils
         }
 
         return value;
+    }
+
+    public static Optional<org.apache.parquet.schema.Type> getSubfieldType(GroupType baseType, String rootName, List<String> nestedColumnPath)
+    {
+        checkArgument(nestedColumnPath.size() >= 1, "subfield size is less than 1");
+        ImmutableList.Builder<org.apache.parquet.schema.Type> typeBuilder = ImmutableList.builder();
+
+        org.apache.parquet.schema.Type parentType = getParquetTypeByName(rootName, baseType.asGroupType());
+        if (parentType == null) {
+            // column doesn't exist in the file
+            return Optional.empty();
+        }
+        typeBuilder.add(parentType);
+
+        for (String field : nestedColumnPath) {
+            org.apache.parquet.schema.Type childType = getParquetTypeByName(field, parentType.asGroupType());
+            if (childType == null) {
+                return Optional.empty();
+            }
+            typeBuilder.add(childType);
+            parentType = childType;
+        }
+        List<org.apache.parquet.schema.Type> typeChain = typeBuilder.build();
+        if (typeChain.isEmpty()) {
+            return Optional.empty();
+        }
+        else if (typeChain.size() == 1) {
+            return Optional.of(getOnlyElement(typeChain));
+        }
+        else {
+            org.apache.parquet.schema.Type messageType = typeChain.get(typeChain.size() - 1);
+            for (int i = typeChain.size() - 2; i >= 0; --i) {
+                GroupType groupType = typeChain.get(i).asGroupType();
+                messageType = new MessageType(groupType.getName(), ImmutableList.of(messageType));
+            }
+            return Optional.of(messageType);
+        }
+    }
+
+    public static List<String> nestedColumnPath(Subfield subfield)
+    {
+        ImmutableList.Builder<String> nestedColumnPathBuilder = ImmutableList.builder();
+        for (Subfield.PathElement pathElement : subfield.getPath()) {
+            checkArgument(pathElement instanceof Subfield.NestedField, "Unsupported subfield. Expected only nested field path elements. " + subfield);
+            nestedColumnPathBuilder.add(((Subfield.NestedField) pathElement).getName());
+        }
+        return nestedColumnPathBuilder.build();
+    }
+
+    public static String pushdownColumnNameForSubfield(Subfield subfield)
+    {
+        // Using the delimiter `$_$_$` to avoid conflict with Subfield serialization when `.` is used as delimiter
+        return columnPathFromSubfield(subfield).stream().collect(joining("$_$_$"));
+    }
+
+    public static List<String> columnPathFromSubfield(Subfield subfield)
+    {
+        ImmutableList.Builder<String> columnPath = ImmutableList.builder();
+        columnPath.add(subfield.getRootName());
+        columnPath.addAll(nestedColumnPath(subfield));
+        return columnPath.build();
     }
 }

@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.jdbc;
 
+import com.facebook.airlift.log.Logging;
 import com.facebook.presto.server.testing.TestingPrestoServer;
-import io.airlift.log.Logging;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
@@ -328,6 +328,15 @@ public class TestJdbcResultSet
     {
         statement.setLargeMaxRows(Integer.MAX_VALUE * 10L);
         statement.getMaxRows();
+    }
+
+    @Test
+    public void testGetStatement()
+            throws SQLException
+    {
+        try (ResultSet rs = statement.executeQuery("SELECT * FROM (VALUES (1), (2), (3))")) {
+            assertEquals(rs.getStatement(), statement);
+        }
     }
 
     private Connection createConnection()

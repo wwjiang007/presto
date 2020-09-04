@@ -14,23 +14,24 @@
 package com.facebook.presto.operator.project;
 
 import com.facebook.presto.array.ReferenceCountMap;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.DictionaryBlock;
+import com.facebook.presto.common.block.DictionaryId;
+import com.facebook.presto.common.block.LazyBlock;
+import com.facebook.presto.common.function.SqlFunctionProperties;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.Work;
 import com.facebook.presto.operator.WorkProcessor;
 import com.facebook.presto.operator.WorkProcessor.ProcessState;
-import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.DictionaryBlock;
-import com.facebook.presto.spi.block.DictionaryId;
-import com.facebook.presto.spi.block.LazyBlock;
 import com.facebook.presto.sql.gen.ExpressionProfiler;
 import com.google.common.annotations.VisibleForTesting;
 import io.airlift.slice.SizeOf;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -38,16 +39,19 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.function.Function;
+import java.util.stream.IntStream;
 
+import static com.facebook.presto.common.block.DictionaryId.randomDictionaryId;
 import static com.facebook.presto.operator.WorkProcessor.ProcessState.finished;
 import static com.facebook.presto.operator.WorkProcessor.ProcessState.ofResult;
 import static com.facebook.presto.operator.WorkProcessor.ProcessState.yield;
 import static com.facebook.presto.operator.project.SelectedPositions.positionsRange;
-import static com.facebook.presto.spi.block.DictionaryId.randomDictionaryId;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.function.Function.identity;
 
 @NotThreadSafe
 public class PageProcessor
@@ -59,19 +63,26 @@ public class PageProcessor
     private final ExpressionProfiler expressionProfiler;
     private final DictionarySourceIdFunction dictionarySourceIdFunction = new DictionarySourceIdFunction();
     private final Optional<PageFilter> filter;
-    private final List<PageProjection> projections;
+    private final List<PageProjectionWithOutputs> projections;
+    private final int outputCount;
 
     private int projectBatchSize;
 
     @VisibleForTesting
-    public PageProcessor(Optional<PageFilter> filter, List<? extends PageProjection> projections, OptionalInt initialBatchSize)
+    public PageProcessor(Optional<PageFilter> filter, List<PageProjectionWithOutputs> projections, OptionalInt initialBatchSize)
     {
         this(filter, projections, initialBatchSize, new ExpressionProfiler());
     }
 
     @VisibleForTesting
-    public PageProcessor(Optional<PageFilter> filter, List<? extends PageProjection> projections, OptionalInt initialBatchSize, ExpressionProfiler expressionProfiler)
+    public PageProcessor(Optional<PageFilter> filter, List<PageProjectionWithOutputs> projections, OptionalInt initialBatchSize, ExpressionProfiler expressionProfiler)
     {
+        List<Integer> outputChannels = projections.stream().map(PageProjectionWithOutputs::getOutputChannels).map(Arrays::stream).map(IntStream::boxed).flatMap(identity()).distinct().collect(toImmutableList());
+        int outputCount = projections.stream().map(PageProjectionWithOutputs::getOutputCount).reduce(Integer::sum).orElse(0);
+        verify(
+                outputChannels.size() == outputCount && (outputCount == 0 || outputChannels.stream().max(Integer::compareTo).orElse(0) == outputChannels.size() - 1),
+                format("Invalid outputChannels: outputCount: %d, outputChannels: %s", outputCount, outputChannels));
+
         this.filter = requireNonNull(filter, "filter is null")
                 .map(pageFilter -> {
                     if (pageFilter.getInputChannels().size() == 1 && pageFilter.isDeterministic()) {
@@ -79,30 +90,33 @@ public class PageProcessor
                     }
                     return pageFilter;
                 });
+        this.outputCount = outputCount;
         this.projections = requireNonNull(projections, "projections is null").stream()
-                .map(projection -> {
-                    if (projection.getInputChannels().size() == 1 && projection.isDeterministic()) {
-                        return new DictionaryAwarePageProjection(projection, dictionarySourceIdFunction);
+                .map(projectionWithOutputs -> {
+                    PageProjection projection = projectionWithOutputs.getPageProjection();
+                    if (projection.getInputChannels().size() == 1 && projection.isDeterministic()
+                            && !(projection instanceof InputPageProjection)) {
+                        return new PageProjectionWithOutputs(new DictionaryAwarePageProjection(projection, dictionarySourceIdFunction), projectionWithOutputs.getOutputChannels());
                     }
-                    return projection;
+                    return projectionWithOutputs;
                 })
                 .collect(toImmutableList());
         this.projectBatchSize = initialBatchSize.orElse(1);
         this.expressionProfiler = requireNonNull(expressionProfiler, "expressionProfiler is null");
     }
 
-    public PageProcessor(Optional<PageFilter> filter, List<? extends PageProjection> projections)
+    public PageProcessor(Optional<PageFilter> filter, List<PageProjectionWithOutputs> projections)
     {
         this(filter, projections, OptionalInt.of(1));
     }
 
-    public Iterator<Optional<Page>> process(ConnectorSession session, DriverYieldSignal yieldSignal, LocalMemoryContext memoryContext, Page page)
+    public Iterator<Optional<Page>> process(SqlFunctionProperties properties, DriverYieldSignal yieldSignal, LocalMemoryContext memoryContext, Page page)
     {
-        WorkProcessor<Page> processor = createWorkProcessor(session, yieldSignal, memoryContext, page);
+        WorkProcessor<Page> processor = createWorkProcessor(properties, yieldSignal, memoryContext, page);
         return processor.yieldingIterator();
     }
 
-    private WorkProcessor<Page> createWorkProcessor(ConnectorSession session, DriverYieldSignal yieldSignal, LocalMemoryContext memoryContext, Page page)
+    private WorkProcessor<Page> createWorkProcessor(SqlFunctionProperties properties, DriverYieldSignal yieldSignal, LocalMemoryContext memoryContext, Page page)
     {
         // limit the scope of the dictionary ids to just one page
         dictionarySourceIdFunction.reset();
@@ -112,7 +126,7 @@ public class PageProcessor
         }
 
         if (filter.isPresent()) {
-            SelectedPositions selectedPositions = filter.get().filter(session, filter.get().getInputChannels().getInputChannels(page));
+            SelectedPositions selectedPositions = filter.get().filter(properties, filter.get().getInputChannels().getInputChannels(page));
             if (selectedPositions.isEmpty()) {
                 return WorkProcessor.of();
             }
@@ -123,17 +137,17 @@ public class PageProcessor
             }
 
             if (selectedPositions.size() != page.getPositionCount()) {
-                return WorkProcessor.create(new ProjectSelectedPositions(session, yieldSignal, memoryContext, page, selectedPositions));
+                return WorkProcessor.create(new ProjectSelectedPositions(properties, yieldSignal, memoryContext, page, selectedPositions));
             }
         }
 
-        return WorkProcessor.create(new ProjectSelectedPositions(session, yieldSignal, memoryContext, page, positionsRange(0, page.getPositionCount())));
+        return WorkProcessor.create(new ProjectSelectedPositions(properties, yieldSignal, memoryContext, page, positionsRange(0, page.getPositionCount())));
     }
 
     private class ProjectSelectedPositions
             implements WorkProcessor.Process<Page>
     {
-        private final ConnectorSession session;
+        private final SqlFunctionProperties properties;
         private final DriverYieldSignal yieldSignal;
         private final LocalMemoryContext memoryContext;
 
@@ -145,18 +159,18 @@ public class PageProcessor
         // remember if we need to re-use the same batch size if we yield last time
         private boolean lastComputeYielded;
         private int lastComputeBatchSize;
-        private Work<Block> pageProjectWork;
+        private Work<List<Block>> pageProjectWork;
 
-        private ProjectSelectedPositions(ConnectorSession session, DriverYieldSignal yieldSignal, LocalMemoryContext memoryContext, Page page, SelectedPositions selectedPositions)
+        private ProjectSelectedPositions(SqlFunctionProperties properties, DriverYieldSignal yieldSignal, LocalMemoryContext memoryContext, Page page, SelectedPositions selectedPositions)
         {
             checkArgument(!selectedPositions.isEmpty(), "selectedPositions is empty");
 
-            this.session = session;
+            this.properties = properties;
             this.yieldSignal = yieldSignal;
             this.page = page;
             this.memoryContext = memoryContext;
             this.selectedPositions = selectedPositions;
-            this.previouslyComputedResults = new Block[projections.size()];
+            this.previouslyComputedResults = new Block[outputCount];
         }
 
         @Override
@@ -268,11 +282,11 @@ public class PageProcessor
 
         private ProcessBatchResult processBatch(int batchSize)
         {
-            Block[] blocks = new Block[projections.size()];
+            Block[] blocks = new Block[outputCount];
 
             int pageSize = 0;
             SelectedPositions positionsBatch = selectedPositions.subRange(0, batchSize);
-            for (int i = 0; i < projections.size(); i++) {
+            for (PageProjectionWithOutputs projection : projections) {
                 if (yieldSignal.isSet()) {
                     return ProcessBatchResult.processBatchYield();
                 }
@@ -282,32 +296,39 @@ public class PageProcessor
                 }
 
                 // if possible, use previouslyComputedResults produced in prior optimistic failure attempt
-                PageProjection projection = projections.get(i);
-                if (previouslyComputedResults[i] != null && previouslyComputedResults[i].getPositionCount() >= batchSize) {
-                    blocks[i] = previouslyComputedResults[i].getRegion(0, batchSize);
+                int[] outputChannels = projection.getOutputChannels();
+                // The progress on all output channels of a projection should be the same, so we just use the first one.
+                if (previouslyComputedResults[outputChannels[0]] != null && previouslyComputedResults[outputChannels[0]].getPositionCount() >= batchSize) {
+                    for (int channel : outputChannels) {
+                        blocks[channel] = previouslyComputedResults[channel].getRegion(0, batchSize);
+                        pageSize += blocks[channel].getSizeInBytes();
+                    }
                 }
                 else {
                     if (pageProjectWork == null) {
                         expressionProfiler.start();
-                        pageProjectWork = projection.project(session, yieldSignal, projection.getInputChannels().getInputChannels(page), positionsBatch);
+                        pageProjectWork = projection.project(properties, yieldSignal, projection.getPageProjection().getInputChannels().getInputChannels(page), positionsBatch);
                         expressionProfiler.stop(positionsBatch.size());
                     }
                     if (!pageProjectWork.process()) {
                         return ProcessBatchResult.processBatchYield();
                     }
-                    previouslyComputedResults[i] = pageProjectWork.getResult();
+                    List<Block> projectionOutputs = pageProjectWork.getResult();
+                    for (int j = 0; j < outputChannels.length; j++) {
+                        int channel = outputChannels[j];
+                        previouslyComputedResults[channel] = projectionOutputs.get(j);
+                        blocks[channel] = previouslyComputedResults[channel];
+                        pageSize += blocks[channel].getSizeInBytes();
+                    }
                     pageProjectWork = null;
-                    blocks[i] = previouslyComputedResults[i];
                 }
-
-                pageSize += blocks[i].getSizeInBytes();
             }
             return ProcessBatchResult.processBatchSuccess(new Page(positionsBatch.size(), blocks));
         }
     }
 
     @VisibleForTesting
-    public List<PageProjection> getProjections()
+    public List<PageProjectionWithOutputs> getProjections()
     {
         return projections;
     }

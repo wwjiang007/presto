@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.spi;
 
+import com.facebook.presto.common.function.SqlFunctionProperties;
 import com.facebook.presto.spi.security.ConnectorIdentity;
-import com.facebook.presto.spi.type.TimeZoneKey;
 
 import java.util.Locale;
 import java.util.Optional;
@@ -32,16 +32,15 @@ public interface ConnectorSession
 
     ConnectorIdentity getIdentity();
 
-    TimeZoneKey getTimeZoneKey();
-
     Locale getLocale();
 
     Optional<String> getTraceToken();
 
+    Optional<String> getClientInfo();
+
     long getStartTime();
 
-    @Deprecated
-    boolean isLegacyTimestamp();
+    SqlFunctionProperties getSqlFunctionProperties();
 
     <T> T getProperty(String name, Class<T> type);
 }

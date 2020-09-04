@@ -15,7 +15,7 @@ package com.facebook.presto.sql.parser;
 
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.Node;
-import com.facebook.presto.sql.tree.PathSpecification;
+import com.facebook.presto.sql.tree.Return;
 import com.facebook.presto.sql.tree.Statement;
 import org.antlr.v4.runtime.BaseErrorListener;
 import org.antlr.v4.runtime.CharStreams;
@@ -38,9 +38,11 @@ import javax.inject.Inject;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import static com.facebook.presto.sql.parser.SqlParserOptions.RESERVED_WORDS_WARNING;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -54,6 +56,7 @@ public class SqlParser
             throw new ParsingException(message, e, line, charPositionInLine);
         }
     };
+    private static final BiConsumer<SqlBaseLexer, SqlBaseParser> DEFAULT_PARSER_INITIALIZER = (SqlBaseLexer lexer, SqlBaseParser parser) -> {};
 
     private static final ErrorHandler PARSER_ERROR_HANDLER = ErrorHandler.builder()
             .specialRule(SqlBaseParser.RULE_expression, "<expression>")
@@ -68,6 +71,7 @@ public class SqlParser
             .ignoredRule(SqlBaseParser.RULE_nonReserved)
             .build();
 
+    private final BiConsumer<SqlBaseLexer, SqlBaseParser> initializer;
     private final EnumSet<IdentifierSymbol> allowedIdentifierSymbols;
     private boolean enhancedErrorHandlerEnabled;
 
@@ -79,6 +83,12 @@ public class SqlParser
     @Inject
     public SqlParser(SqlParserOptions options)
     {
+        this(options, DEFAULT_PARSER_INITIALIZER);
+    }
+
+    public SqlParser(SqlParserOptions options, BiConsumer<SqlBaseLexer, SqlBaseParser> initializer)
+    {
+        this.initializer = requireNonNull(initializer, "initializer is null");
         requireNonNull(options, "options is null");
         allowedIdentifierSymbols = EnumSet.copyOf(options.getAllowedIdentifierSymbols());
         enhancedErrorHandlerEnabled = options.isEnhancedErrorHandlerEnabled();
@@ -112,9 +122,9 @@ public class SqlParser
         return (Expression) invokeParser("expression", expression, SqlBaseParser::standaloneExpression, parsingOptions);
     }
 
-    public PathSpecification createPathSpecification(String expression)
+    public Return createReturn(String routineBody, ParsingOptions parsingOptions)
     {
-        return (PathSpecification) invokeParser("path specification", expression, SqlBaseParser::standalonePathSpecification, new ParsingOptions());
+        return (Return) invokeParser("return", routineBody, SqlBaseParser::standaloneRoutineBody, parsingOptions);
     }
 
     private Node invokeParser(String name, String sql, Function<SqlBaseParser, ParserRuleContext> parseFunction, ParsingOptions parsingOptions)
@@ -123,6 +133,7 @@ public class SqlParser
             SqlBaseLexer lexer = new SqlBaseLexer(new CaseInsensitiveStream(CharStreams.fromString(sql)));
             CommonTokenStream tokenStream = new CommonTokenStream(lexer);
             SqlBaseParser parser = new SqlBaseParser(tokenStream);
+            initializer.accept(lexer, parser);
 
             // Override the default error strategy to not attempt inserting or deleting a token.
             // Otherwise, it messes up error reporting
@@ -237,9 +248,13 @@ public class SqlParser
             context.getParent().removeLastChild();
 
             Token token = (Token) context.getChild(0).getPayload();
-            if (token.getText().equalsIgnoreCase("CURRENT_ROLE")) {
-                warningConsumer.accept(new ParsingWarning(format("Reserved word used: %s", token.getText()), token.getLine(), token.getCharPositionInLine()));
+            if (RESERVED_WORDS_WARNING.contains(token.getText().toUpperCase())) {
+                warningConsumer.accept(new ParsingWarning(
+                        format("%s should be a reserved word, please use double quote (\"%s\"). This will be made a reserved word in future release.", token.getText(), token.getText()),
+                        token.getLine(),
+                        token.getCharPositionInLine()));
             }
+
             context.getParent().addChild(new CommonToken(
                     new Pair<>(token.getTokenSource(), token.getInputStream()),
                     SqlBaseLexer.IDENTIFIER,

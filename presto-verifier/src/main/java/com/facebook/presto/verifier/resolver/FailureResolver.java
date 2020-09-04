@@ -14,11 +14,21 @@
 package com.facebook.presto.verifier.resolver;
 
 import com.facebook.presto.jdbc.QueryStats;
+import com.facebook.presto.verifier.framework.MatchResult;
+import com.facebook.presto.verifier.framework.QueryBundle;
 import com.facebook.presto.verifier.framework.QueryException;
 
 import java.util.Optional;
 
 public interface FailureResolver
 {
-    Optional<String> resolve(QueryStats controlQueryStats, QueryException queryException);
+    default Optional<String> resolveQueryFailure(QueryStats controlQueryStats, QueryException queryException, Optional<QueryBundle> test)
+    {
+        return Optional.empty();
+    }
+
+    default Optional<String> resolveResultMismatch(MatchResult matchResult, QueryBundle control)
+    {
+        return Optional.empty();
+    }
 }

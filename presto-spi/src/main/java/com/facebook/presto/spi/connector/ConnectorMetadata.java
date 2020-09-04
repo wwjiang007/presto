@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.spi.connector;
 
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
@@ -31,7 +33,8 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SystemTable;
-import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.TableLayoutFilterCoverage;
+import com.facebook.presto.spi.api.Experimental;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
@@ -39,7 +42,6 @@ import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
-import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
 
 import java.util.Collection;
@@ -48,10 +50,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.spi.TableLayoutFilterCoverage.NOT_APPLICABLE;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
 import static java.util.stream.Collectors.toList;
@@ -123,6 +127,16 @@ public interface ConnectorMetadata
     }
 
     /**
+     * Experimental: if true, the engine will invoke getLayout otherwise, getLayout will not be called.
+     */
+    @Deprecated
+    @Experimental
+    default boolean isLegacyGetLayoutSupported(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        return true;
+    }
+
+    /**
      * Return a partitioning handle which the connector can transparently convert both {@code left} and {@code right} into.
      */
     @Deprecated
@@ -140,12 +154,12 @@ public interface ConnectorMetadata
      * <ul>
      * <li> n >= m </li>
      * <li> For every partition <code>b_i</code> in partitioning <code>b</code>,
-     *      the rows it contains is the same as union of a set of partitions <code>a_{i_1}, a_{i_2}, ... a_{i_k}</code>
-     *      in partitioning <code>a</code>, i.e.
-     *      <p>
-     *          <code>b_i = a_{i_1} + a_{i_2} + ... + a_{i_k}</code>
+     * the rows it contains is the same as union of a set of partitions <code>a_{i_1}, a_{i_2}, ... a_{i_k}</code>
+     * in partitioning <code>a</code>, i.e.
+     * <p>
+     * <code>b_i = a_{i_1} + a_{i_2} + ... + a_{i_k}</code>
      * <li> Connector can transparently convert partitioning <code>a</code> to partitioning <code>b</code>
-     *      associated with the provided table layout handle.
+     * associated with the provided table layout handle.
      * </ul>
      *
      * <p>
@@ -227,14 +241,22 @@ public interface ConnectorMetadata
     ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle);
 
     /**
+     * Returns a TupleDomain of constraints that is suitable for ExplainIO
+     */
+    default TupleDomain<ColumnHandle> toExplainIOConstraints(ConnectorSession session, ConnectorTableHandle tableHandle, TupleDomain<ColumnHandle> constraints)
+    {
+        return constraints;
+    }
+
+    /**
      * Gets the metadata for all columns that match the specified table prefix.
      */
     Map<SchemaTableName, List<ColumnMetadata>> listTableColumns(ConnectorSession session, SchemaTablePrefix prefix);
 
     /**
-     * Get statistics for table for given filtering constraint.
+     * Get statistics for table for given columns and filtering constraint.
      */
-    default TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint<ColumnHandle> constraint)
+    default TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Optional<ConnectorTableLayoutHandle> tableLayoutHandle, List<ColumnHandle> columnHandles, Constraint<ColumnHandle> constraint)
     {
         return TableStatistics.empty();
     }
@@ -279,7 +301,7 @@ public interface ConnectorMetadata
      * Creates a temporary table with optional partitioning requirements.
      * Temporary table might have different default storage format, compression scheme, replication factor, etc,
      * and gets automatically dropped when the transaction ends.
-     *
+     * <p>
      * This SPI is unstable and subject to change in the future.
      */
     default ConnectorTableHandle createTemporaryTable(ConnectorSession session, List<ColumnMetadata> columns, Optional<ConnectorPartitioningMetadata> partitioningMetadata)
@@ -338,6 +360,19 @@ public interface ConnectorMetadata
     }
 
     /**
+     * A connector can have preferred shuffle layout for table write.
+     * For example, Hive connector might prefer to shuffle on partitioned columns for partitioned unbucketed table.
+     *
+     * @apiNote this method and {@link #getNewTableLayout} cannot both return non-empty table layout.
+     * @see #getPreferredShuffleLayoutForInsert
+     */
+    @Experimental
+    default Optional<ConnectorNewTableLayout> getPreferredShuffleLayoutForNewTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    {
+        return Optional.empty();
+    }
+
+    /**
      * Get the physical layout for a inserting into an existing table.
      */
     default Optional<ConnectorNewTableLayout> getInsertLayout(ConnectorSession session, ConnectorTableHandle tableHandle)
@@ -365,6 +400,19 @@ public interface ConnectorMetadata
                 .collect(toList());
 
         return Optional.of(new ConnectorNewTableLayout(partitioningHandle, partitionColumns));
+    }
+
+    /**
+     * A connector can have preferred shuffle layout for table write.
+     * For example, Hive connector might prefer to shuffle on partitioned columns for partitioned unbucketed table.
+     *
+     * @apiNote this method and {@link #getInsertLayout} cannot both return non-empty table layout.
+     * @see #getPreferredShuffleLayoutForNewTable
+     */
+    @Experimental
+    default Optional<ConnectorNewTableLayout> getPreferredShuffleLayoutForInsert(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        return Optional.empty();
     }
 
     /**
@@ -473,7 +521,7 @@ public interface ConnectorMetadata
     /**
      * Create the specified view. The data for the view is opaque to the connector.
      */
-    default void createView(ConnectorSession session, SchemaTableName viewName, String viewData, boolean replace)
+    default void createView(ConnectorSession session, ConnectorTableMetadata viewMetadata, String viewData, boolean replace)
     {
         throw new PrestoException(NOT_SUPPORTED, "This connector does not support creating views");
     }
@@ -513,7 +561,7 @@ public interface ConnectorMetadata
     /**
      * @return whether delete without table scan is supported
      */
-    default boolean supportsMetadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle)
+    default boolean supportsMetadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle, Optional<ConnectorTableLayoutHandle> tableLayoutHandle)
     {
         throw new PrestoException(NOT_SUPPORTED, "This connector does not support deletes");
     }
@@ -631,22 +679,29 @@ public interface ConnectorMetadata
     }
 
     /**
-     * Commits partition for table creation.
-     * To enable recoverable grouped execution, it is required that output connector supports partition commit.
-     * @apiNote This method is unstable and subject to change in the future.
+     * Commits page sink for table creation.
+     * To enable recoverable grouped execution, it is required that output connector supports page sink commit.
+     * This method is unstable and subject to change in the future.
      */
-    default void commitPartition(ConnectorSession session, ConnectorOutputTableHandle tableHandle, int partitionId, Collection<Slice> fragments)
+    @Experimental
+    default CompletableFuture<Void> commitPageSinkAsync(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
     {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support partition commit");
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support page sink commit");
     }
 
     /**
-     * Commits partition for table insertion.
-     * To enable recoverable grouped execution, it is required that output connector supports partition commit.
-     * @apiNote This method is unstable and subject to change in the future.
+     * Commits page sink for table insertion.
+     * To enable recoverable grouped execution, it is required that output connector supports page sink commit.
+     * This method is unstable and subject to change in the future.
      */
-    default void commitPartition(ConnectorSession session, ConnectorInsertTableHandle tableHandle, int partitionId, Collection<Slice> fragments)
+    @Experimental
+    default CompletableFuture<Void> commitPageSinkAsync(ConnectorSession session, ConnectorInsertTableHandle tableHandle, Collection<Slice> fragments)
     {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support partition commit");
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support page sink commit");
+    }
+
+    default TableLayoutFilterCoverage getTableLayoutFilterCoverage(ConnectorTableLayoutHandle tableHandle, Set<String> relevantPartitionColumns)
+    {
+        return NOT_APPLICABLE;
     }
 }

@@ -16,8 +16,8 @@ package com.facebook.presto.execution;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.security.AccessControl;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.security.Privilege;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.tree.Expression;
@@ -69,7 +69,7 @@ public class GrantTask
 
         // verify current identity has permissions to grant permissions
         for (Privilege privilege : privileges) {
-            accessControl.checkCanGrantTablePrivilege(session.getRequiredTransactionId(), session.getIdentity(), privilege, tableName, createPrincipal(statement.getGrantee()), statement.isWithGrantOption());
+            accessControl.checkCanGrantTablePrivilege(session.getRequiredTransactionId(), session.getIdentity(), session.getAccessControlContext(), privilege, tableName, createPrincipal(statement.getGrantee()), statement.isWithGrantOption());
         }
 
         metadata.grantTablePrivileges(session, tableName, privileges, createPrincipal(statement.getGrantee()), statement.isWithGrantOption());

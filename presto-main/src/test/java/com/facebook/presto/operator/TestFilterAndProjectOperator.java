@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.common.Page;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.project.PageProcessor;
-import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
@@ -34,22 +34,22 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.common.function.OperatorType.ADD;
+import static com.facebook.presto.common.function.OperatorType.BETWEEN;
+import static com.facebook.presto.common.function.OperatorType.EQUAL;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
 import static com.facebook.presto.operator.OperatorAssertion.assertOperatorEquals;
-import static com.facebook.presto.spi.function.OperatorType.ADD;
-import static com.facebook.presto.spi.function.OperatorType.BETWEEN;
-import static com.facebook.presto.spi.function.OperatorType.EQUAL;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.field;
 import static com.facebook.presto.testing.TestingTaskContext.createTaskContext;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -106,7 +106,7 @@ public class TestFilterAndProjectOperator
                 constant(5L, BIGINT));
 
         ExpressionCompiler compiler = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0));
-        Supplier<PageProcessor> processor = compiler.compilePageProcessor(Optional.of(filter), ImmutableList.of(field0, add5));
+        Supplier<PageProcessor> processor = compiler.compilePageProcessor(TEST_SESSION.getSqlFunctionProperties(), Optional.of(filter), ImmutableList.of(field0, add5));
 
         OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(
                 0,
@@ -151,7 +151,7 @@ public class TestFilterAndProjectOperator
                 constant(10L, BIGINT));
 
         ExpressionCompiler compiler = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0));
-        Supplier<PageProcessor> processor = compiler.compilePageProcessor(Optional.of(filter), ImmutableList.of(field(1, BIGINT)));
+        Supplier<PageProcessor> processor = compiler.compilePageProcessor(TEST_SESSION.getSqlFunctionProperties(), Optional.of(filter), ImmutableList.of(field(1, BIGINT)));
 
         OperatorFactory operatorFactory = new FilterAndProjectOperator.FilterAndProjectOperatorFactory(
                 0,

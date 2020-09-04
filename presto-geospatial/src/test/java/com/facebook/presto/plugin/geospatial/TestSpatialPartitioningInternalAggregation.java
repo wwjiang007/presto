@@ -18,6 +18,9 @@ import com.esri.core.geometry.Point;
 import com.esri.core.geometry.ogc.OGCGeometry;
 import com.esri.core.geometry.ogc.OGCPoint;
 import com.facebook.presto.block.BlockAssertions;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
 import com.facebook.presto.geospatial.KdbTreeUtils;
 import com.facebook.presto.geospatial.Rectangle;
 import com.facebook.presto.metadata.FunctionManager;
@@ -26,9 +29,7 @@ import com.facebook.presto.operator.aggregation.AccumulatorFactory;
 import com.facebook.presto.operator.aggregation.GroupedAccumulator;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.operator.scalar.AbstractTestFunctions;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.PrestoException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import org.testng.annotations.BeforeClass;
@@ -38,17 +39,19 @@ import org.testng.annotations.Test;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
 import static com.facebook.presto.geospatial.KdbTree.buildKdbTree;
-import static com.facebook.presto.geospatial.serde.GeometrySerde.serialize;
+import static com.facebook.presto.geospatial.serde.EsriGeometrySerde.serialize;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.createGroupByIdBlock;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.getFinalBlock;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.getGroupValue;
 import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.google.common.math.DoubleMath.roundToInt;
 import static java.math.RoundingMode.CEILING;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.fail;
 
 public class TestSpatialPartitioningInternalAggregation
         extends AbstractTestFunctions
@@ -91,6 +94,28 @@ public class TestSpatialPartitioningInternalAggregation
         groupedAggregation.addInput(createGroupByIdBlock(0, page.getPositionCount()), page);
         String groupValue = (String) getGroupValue(groupedAggregation, 0);
         assertEquals(groupValue, expectedValue);
+    }
+
+    @Test
+    public void testEmptyPartitionException()
+    {
+        InternalAggregationFunction function = getFunction();
+
+        Block geometryBlock = GEOMETRY.createBlockBuilder(null, 0).build();
+        Block partitionCountBlock = BlockAssertions.createRLEBlock(10, 0);
+        Page page = new Page(geometryBlock, partitionCountBlock);
+
+        AccumulatorFactory accumulatorFactory = function.bind(Ints.asList(0, 1, 2), Optional.empty());
+        Accumulator accumulator = accumulatorFactory.createAccumulator();
+        accumulator.addInput(page);
+        try {
+            getFinalBlock(accumulator);
+            fail("Should fail creating spatial partition with no rows.");
+        }
+        catch (PrestoException e) {
+            assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
+            assertEquals(e.getMessage(), "No rows supplied to spatial partition.");
+        }
     }
 
     private InternalAggregationFunction getFunction()

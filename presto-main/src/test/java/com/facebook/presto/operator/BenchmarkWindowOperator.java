@@ -14,10 +14,10 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.RowPagesBuilder;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.SortOrder;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.SortOrder;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.testing.TestingTaskContext;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -44,14 +44,14 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.block.BlockAssertions.createLongSequenceBlock;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
 import static com.facebook.presto.operator.BenchmarkWindowOperator.Context.ROWS_PER_PAGE;
 import static com.facebook.presto.operator.BenchmarkWindowOperator.Context.TOTAL_PAGES;
 import static com.facebook.presto.operator.TestWindowOperator.ROW_NUMBER;
 import static com.facebook.presto.operator.TestWindowOperator.createFactoryUnbounded;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
@@ -115,7 +115,9 @@ public class BenchmarkWindowOperator
                         Ints.asList(),
                         Ints.asList(3),
                         ImmutableList.of(SortOrder.ASC_NULLS_LAST),
-                        0);
+                        0,
+                        new DummySpillerFactory(),
+                        false);
             }
             else if (numberOfPreGroupedColumns < NUMBER_OF_GROUP_COLUMNS) {
                 // Partially grouped
@@ -127,7 +129,9 @@ public class BenchmarkWindowOperator
                         Ints.asList(1),
                         Ints.asList(3),
                         ImmutableList.of(SortOrder.ASC_NULLS_LAST),
-                        0);
+                        0,
+                        new DummySpillerFactory(),
+                        false);
             }
             else {
                 // Fully grouped and (potentially) sorted
@@ -139,7 +143,9 @@ public class BenchmarkWindowOperator
                         Ints.asList(0, 1),
                         Ints.asList(3),
                         ImmutableList.of(SortOrder.ASC_NULLS_LAST),
-                        (numberOfPreGroupedColumns - NUMBER_OF_GROUP_COLUMNS));
+                        (numberOfPreGroupedColumns - NUMBER_OF_GROUP_COLUMNS),
+                        new DummySpillerFactory(),
+                        false);
             }
         }
 

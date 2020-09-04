@@ -19,8 +19,8 @@ import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
+import static com.facebook.presto.hive.HiveColumnHandle.pathColumnHandle;
 import static java.util.Objects.requireNonNull;
-import static java.util.stream.Collectors.toList;
 
 public class HiveBucketHandle
 {
@@ -60,13 +60,13 @@ public class HiveBucketHandle
         return readBucketCount;
     }
 
-    public HiveBucketProperty toTableBucketProperty()
+    public boolean isVirtuallyBucketed()
     {
-        return new HiveBucketProperty(
-                columns.stream()
-                        .map(HiveColumnHandle::getName)
-                        .collect(toList()),
-                tableBucketCount,
-                ImmutableList.of());
+        return columns.size() == 1 && columns.get(0).equals(pathColumnHandle());
+    }
+
+    public static HiveBucketHandle createVirtualBucketHandle(int virtualBucketCount)
+    {
+        return new HiveBucketHandle(ImmutableList.of(pathColumnHandle()), virtualBucketCount, virtualBucketCount);
     }
 }

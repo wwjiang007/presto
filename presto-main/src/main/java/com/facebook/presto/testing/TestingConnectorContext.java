@@ -16,28 +16,37 @@ package com.facebook.presto.testing;
 import com.facebook.presto.GroupByHashPageIndexerFactory;
 import com.facebook.presto.PagesIndexPageSorter;
 import com.facebook.presto.block.BlockEncodingManager;
+import com.facebook.presto.common.block.BlockEncodingSerde;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.connector.ConnectorAwareNodeManager;
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.cost.ConnectorFilterStatsCalculatorService;
+import com.facebook.presto.cost.FilterStatsCalculator;
+import com.facebook.presto.cost.ScalarStatsCalculator;
+import com.facebook.presto.cost.StatsNormalizer;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.PagesIndex;
+import com.facebook.presto.spi.ConnectorId;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.PageIndexerFactory;
 import com.facebook.presto.spi.PageSorter;
 import com.facebook.presto.spi.connector.ConnectorContext;
 import com.facebook.presto.spi.function.FunctionMetadataManager;
 import com.facebook.presto.spi.function.StandardFunctionResolution;
+import com.facebook.presto.spi.plan.FilterStatsCalculatorService;
 import com.facebook.presto.spi.relation.DeterminismEvaluator;
 import com.facebook.presto.spi.relation.DomainTranslator;
 import com.facebook.presto.spi.relation.ExpressionOptimizer;
 import com.facebook.presto.spi.relation.PredicateCompiler;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.RowExpressionService;
-import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
 import com.facebook.presto.sql.gen.RowExpressionPredicateCompiler;
+import com.facebook.presto.sql.planner.planPrinter.RowExpressionFormatter;
 import com.facebook.presto.sql.relational.FunctionResolution;
 import com.facebook.presto.sql.relational.RowExpressionDeterminismEvaluator;
 import com.facebook.presto.sql.relational.RowExpressionDomainTranslator;
@@ -57,6 +66,8 @@ public class TestingConnectorContext
     private final DomainTranslator domainTranslator = new RowExpressionDomainTranslator(metadata);
     private final PredicateCompiler predicateCompiler = new RowExpressionPredicateCompiler(metadata);
     private final DeterminismEvaluator determinismEvaluator = new RowExpressionDeterminismEvaluator(functionManager);
+    private final FilterStatsCalculatorService filterStatsCalculatorService = new ConnectorFilterStatsCalculatorService(new FilterStatsCalculator(metadata, new ScalarStatsCalculator(metadata), new StatsNormalizer()));
+    private final BlockEncodingSerde blockEncodingSerde = new BlockEncodingManager(typeManager);
 
     @Override
     public NodeManager getNodeManager()
@@ -122,6 +133,24 @@ public class TestingConnectorContext
             {
                 return determinismEvaluator;
             }
+
+            @Override
+            public String formatRowExpression(ConnectorSession session, RowExpression expression)
+            {
+                return new RowExpressionFormatter(functionManager).formatRowExpression(session, expression);
+            }
         };
+    }
+
+    @Override
+    public FilterStatsCalculatorService getFilterStatsCalculatorService()
+    {
+        return filterStatsCalculatorService;
+    }
+
+    @Override
+    public BlockEncodingSerde getBlockEncodingSerde()
+    {
+        return blockEncodingSerde;
     }
 }

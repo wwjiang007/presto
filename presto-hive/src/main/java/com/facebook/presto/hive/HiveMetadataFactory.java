@@ -13,14 +13,17 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.hive.metastore.CachingHiveMetastore;
 import com.facebook.presto.hive.metastore.ExtendedHiveMetastore;
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
 import com.facebook.presto.hive.statistics.MetastoreHiveStatisticsProvider;
-import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.function.StandardFunctionResolution;
+import com.facebook.presto.spi.plan.FilterStatsCalculatorService;
+import com.facebook.presto.spi.relation.RowExpressionService;
 import com.google.common.util.concurrent.ListeningExecutorService;
-import io.airlift.json.JsonCodec;
-import io.airlift.log.Logger;
 import org.joda.time.DateTimeZone;
 
 import javax.inject.Inject;
@@ -39,36 +42,51 @@ public class HiveMetadataFactory
     private final boolean skipTargetCleanupOnRollback;
     private final boolean writesToNonManagedTablesEnabled;
     private final boolean createsOfNonManagedTablesEnabled;
+    private final int maxPartitionBatchSize;
     private final long perTransactionCacheMaximumSize;
-    private final int maxPartitions;
     private final ExtendedHiveMetastore metastore;
     private final HdfsEnvironment hdfsEnvironment;
     private final HivePartitionManager partitionManager;
     private final DateTimeZone timeZone;
     private final TypeManager typeManager;
     private final LocationService locationService;
+    private final StandardFunctionResolution functionResolution;
+    private final RowExpressionService rowExpressionService;
+    private final FilterStatsCalculatorService filterStatsCalculatorService;
     private final TableParameterCodec tableParameterCodec;
     private final JsonCodec<PartitionUpdate> partitionUpdateCodec;
     private final ListeningExecutorService fileRenameExecutor;
     private final TypeTranslator typeTranslator;
     private final StagingFileCommitter stagingFileCommitter;
+    private final ZeroRowFileCreator zeroRowFileCreator;
     private final String prestoVersion;
+    private final PartitionObjectBuilder partitionObjectBuilder;
+    private final HiveEncryptionInformationProvider encryptionInformationProvider;
+    private final HivePartitionStats hivePartitionStats;
 
     @Inject
     @SuppressWarnings("deprecation")
     public HiveMetadataFactory(
             HiveClientConfig hiveClientConfig,
+            MetastoreClientConfig metastoreClientConfig,
             ExtendedHiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
             HivePartitionManager partitionManager,
             @ForFileRename ListeningExecutorService fileRenameExecutor,
             TypeManager typeManager,
             LocationService locationService,
+            StandardFunctionResolution functionResolution,
+            RowExpressionService rowExpressionService,
+            FilterStatsCalculatorService filterStatsCalculatorService,
             TableParameterCodec tableParameterCodec,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
             TypeTranslator typeTranslator,
             StagingFileCommitter stagingFileCommitter,
-            NodeVersion nodeVersion)
+            ZeroRowFileCreator zeroRowFileCreator,
+            NodeVersion nodeVersion,
+            PartitionObjectBuilder partitionObjectBuilder,
+            HiveEncryptionInformationProvider encryptionInformationProvider,
+            HivePartitionStats hivePartitionStats)
     {
         this(
                 metastore,
@@ -80,16 +98,23 @@ public class HiveMetadataFactory
                 hiveClientConfig.isSkipTargetCleanupOnRollback(),
                 hiveClientConfig.getWritesToNonManagedTablesEnabled(),
                 hiveClientConfig.getCreatesOfNonManagedTablesEnabled(),
-                hiveClientConfig.getPerTransactionMetastoreCacheMaximumSize(),
-                hiveClientConfig.getMaxPartitionsPerScan(),
+                hiveClientConfig.getMaxPartitionBatchSize(),
+                metastoreClientConfig.getPerTransactionMetastoreCacheMaximumSize(),
                 typeManager,
                 locationService,
+                functionResolution,
+                rowExpressionService,
+                filterStatsCalculatorService,
                 tableParameterCodec,
                 partitionUpdateCodec,
                 fileRenameExecutor,
                 typeTranslator,
                 stagingFileCommitter,
-                nodeVersion.toString());
+                zeroRowFileCreator,
+                nodeVersion.toString(),
+                partitionObjectBuilder,
+                encryptionInformationProvider,
+                hivePartitionStats);
     }
 
     public HiveMetadataFactory(
@@ -102,22 +127,30 @@ public class HiveMetadataFactory
             boolean skipTargetCleanupOnRollback,
             boolean writesToNonManagedTablesEnabled,
             boolean createsOfNonManagedTablesEnabled,
+            int maxPartitionBatchSize,
             long perTransactionCacheMaximumSize,
-            int maxPartitions,
             TypeManager typeManager,
             LocationService locationService,
+            StandardFunctionResolution functionResolution,
+            RowExpressionService rowExpressionService,
+            FilterStatsCalculatorService filterStatsCalculatorService,
             TableParameterCodec tableParameterCodec,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
             ListeningExecutorService fileRenameExecutor,
             TypeTranslator typeTranslator,
             StagingFileCommitter stagingFileCommitter,
-            String prestoVersion)
+            ZeroRowFileCreator zeroRowFileCreator,
+            String prestoVersion,
+            PartitionObjectBuilder partitionObjectBuilder,
+            HiveEncryptionInformationProvider encryptionInformationProvider,
+            HivePartitionStats hivePartitionStats)
     {
         this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
         this.skipDeletionForAlter = skipDeletionForAlter;
         this.skipTargetCleanupOnRollback = skipTargetCleanupOnRollback;
         this.writesToNonManagedTablesEnabled = writesToNonManagedTablesEnabled;
         this.createsOfNonManagedTablesEnabled = createsOfNonManagedTablesEnabled;
+        this.maxPartitionBatchSize = maxPartitionBatchSize;
         this.perTransactionCacheMaximumSize = perTransactionCacheMaximumSize;
 
         this.metastore = requireNonNull(metastore, "metastore is null");
@@ -126,13 +159,19 @@ public class HiveMetadataFactory
         this.timeZone = requireNonNull(timeZone, "timeZone is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.locationService = requireNonNull(locationService, "locationService is null");
+        this.functionResolution = requireNonNull(functionResolution, "functionResolution is null");
+        this.rowExpressionService = requireNonNull(rowExpressionService, "rowExpressionService is null");
+        this.filterStatsCalculatorService = requireNonNull(filterStatsCalculatorService, "filterStatsCalculatorService is null");
         this.tableParameterCodec = requireNonNull(tableParameterCodec, "tableParameterCodec is null");
         this.partitionUpdateCodec = requireNonNull(partitionUpdateCodec, "partitionUpdateCodec is null");
         this.fileRenameExecutor = requireNonNull(fileRenameExecutor, "fileRenameExecutor is null");
         this.typeTranslator = requireNonNull(typeTranslator, "typeTranslator is null");
         this.stagingFileCommitter = requireNonNull(stagingFileCommitter, "stagingFileCommitter is null");
+        this.zeroRowFileCreator = requireNonNull(zeroRowFileCreator, "zeroRowFileCreator is null");
         this.prestoVersion = requireNonNull(prestoVersion, "prestoVersion is null");
-        this.maxPartitions = maxPartitions;
+        this.partitionObjectBuilder = requireNonNull(partitionObjectBuilder, "partitionObjectBuilder is null");
+        this.encryptionInformationProvider = requireNonNull(encryptionInformationProvider, "encryptionInformationProvider is null");
+        this.hivePartitionStats = requireNonNull(hivePartitionStats, "hivePartitionStats is null");
 
         if (!allowCorruptWritesForTesting && !timeZone.equals(DateTimeZone.getDefault())) {
             log.warn("Hive writes are disabled. " +
@@ -160,14 +199,21 @@ public class HiveMetadataFactory
                 allowCorruptWritesForTesting,
                 writesToNonManagedTablesEnabled,
                 createsOfNonManagedTablesEnabled,
+                maxPartitionBatchSize,
                 typeManager,
                 locationService,
+                functionResolution,
+                rowExpressionService,
+                filterStatsCalculatorService,
                 tableParameterCodec,
                 partitionUpdateCodec,
                 typeTranslator,
                 prestoVersion,
                 new MetastoreHiveStatisticsProvider(metastore),
-                maxPartitions,
-                stagingFileCommitter);
+                stagingFileCommitter,
+                zeroRowFileCreator,
+                partitionObjectBuilder,
+                encryptionInformationProvider,
+                hivePartitionStats);
     }
 }

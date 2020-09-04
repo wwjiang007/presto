@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.operator.JoinProbe.JoinProbeFactory;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.PartitioningSpillerFactory;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 
 import javax.inject.Inject;
 

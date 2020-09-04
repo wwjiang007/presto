@@ -15,6 +15,8 @@ package com.facebook.presto.connector.informationSchema;
 
 import com.facebook.presto.FullConnectorSession;
 import com.facebook.presto.Session;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
 import com.facebook.presto.metadata.InternalTable;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
@@ -27,9 +29,8 @@ import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.FixedPageSource;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.SplitContext;
 import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.facebook.presto.spi.security.AccessDeniedException;
@@ -75,7 +76,12 @@ public class InformationSchemaPageSourceProvider
     }
 
     @Override
-    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorSplit split, List<ColumnHandle> columns)
+    public ConnectorPageSource createPageSource(
+            ConnectorTransactionHandle transactionHandle,
+            ConnectorSession session,
+            ConnectorSplit split,
+            List<ColumnHandle> columns,
+            SplitContext splitContext)
     {
         InternalTable table = getInternalTable(session, split, columns);
 
@@ -241,7 +247,7 @@ public class InformationSchemaPageSourceProvider
         InternalTable.Builder table = InternalTable.builder(informationSchemaTableColumns(TABLE_ROLES));
 
         try {
-            accessControl.checkCanShowRoles(session.getRequiredTransactionId(), session.getIdentity(), catalog);
+            accessControl.checkCanShowRoles(session.getRequiredTransactionId(), session.getIdentity(), session.getAccessControlContext(), catalog);
         }
         catch (AccessDeniedException exception) {
             return table.build();

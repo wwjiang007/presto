@@ -23,13 +23,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.metadata.CastType.CAST;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.gen.InCodeGenerator.SwitchGenerationCase.DIRECT_SWITCH;
 import static com.facebook.presto.sql.gen.InCodeGenerator.SwitchGenerationCase.HASH_SWITCH;
 import static com.facebook.presto.sql.gen.InCodeGenerator.SwitchGenerationCase.SET_CONTAINS;
@@ -44,9 +44,9 @@ public class TestInCodeGenerator
     {
         FunctionManager functionManager = createTestMetadataManager().getFunctionManager();
         List<RowExpression> values = new ArrayList<>();
-        values.add(constant(Integer.MIN_VALUE, INTEGER));
-        values.add(constant(Integer.MAX_VALUE, INTEGER));
-        values.add(constant(3, INTEGER));
+        values.add(constant((long) Integer.MIN_VALUE, INTEGER));
+        values.add(constant((long) Integer.MAX_VALUE, INTEGER));
+        values.add(constant(3L, INTEGER));
         assertEquals(checkSwitchGenerationCase(INTEGER, values), DIRECT_SWITCH);
 
         values.add(constant(null, INTEGER));
@@ -59,11 +59,11 @@ public class TestInCodeGenerator
         assertEquals(checkSwitchGenerationCase(INTEGER, values), DIRECT_SWITCH);
 
         for (int i = 6; i <= 32; ++i) {
-            values.add(constant(i, INTEGER));
+            values.add(constant((long) i, INTEGER));
         }
         assertEquals(checkSwitchGenerationCase(INTEGER, values), DIRECT_SWITCH);
 
-        values.add(constant(33, INTEGER));
+        values.add(constant(33L, INTEGER));
         assertEquals(checkSwitchGenerationCase(INTEGER, values), SET_CONTAINS);
     }
 
@@ -138,9 +138,9 @@ public class TestInCodeGenerator
     public void testVarchar()
     {
         List<RowExpression> values = new ArrayList<>();
-        values.add(constant(Slices.utf8Slice("1"), DOUBLE));
-        values.add(constant(Slices.utf8Slice("2"), DOUBLE));
-        values.add(constant(Slices.utf8Slice("3"), DOUBLE));
+        values.add(constant(Slices.utf8Slice("1"), VARCHAR));
+        values.add(constant(Slices.utf8Slice("2"), VARCHAR));
+        values.add(constant(Slices.utf8Slice("3"), VARCHAR));
         assertEquals(checkSwitchGenerationCase(VARCHAR, values), HASH_SWITCH);
 
         values.add(constant(null, VARCHAR));

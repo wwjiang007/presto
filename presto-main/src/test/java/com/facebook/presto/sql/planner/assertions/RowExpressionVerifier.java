@@ -14,9 +14,10 @@
 package com.facebook.presto.sql.planner.assertions;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.common.function.OperatorType;
+import com.facebook.presto.common.type.RowType;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.function.FunctionMetadata;
-import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.ConstantExpression;
 import com.facebook.presto.spi.relation.RowExpression;
@@ -32,6 +33,7 @@ import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.DecimalLiteral;
+import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.DoubleLiteral;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.GenericLiteral;
@@ -45,7 +47,6 @@ import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.Node;
 import com.facebook.presto.sql.tree.NotExpression;
 import com.facebook.presto.sql.tree.NullLiteral;
-import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.SimpleCaseExpression;
 import com.facebook.presto.sql.tree.StringLiteral;
 import com.facebook.presto.sql.tree.SymbolReference;
@@ -57,19 +58,21 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.spi.function.OperatorType.ADD;
-import static com.facebook.presto.spi.function.OperatorType.DIVIDE;
-import static com.facebook.presto.spi.function.OperatorType.EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN;
-import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN_OR_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.IS_DISTINCT_FROM;
-import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
-import static com.facebook.presto.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.MODULUS;
-import static com.facebook.presto.spi.function.OperatorType.MULTIPLY;
-import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.SUBTRACT;
+import static com.facebook.presto.common.function.OperatorType.ADD;
+import static com.facebook.presto.common.function.OperatorType.DIVIDE;
+import static com.facebook.presto.common.function.OperatorType.EQUAL;
+import static com.facebook.presto.common.function.OperatorType.GREATER_THAN;
+import static com.facebook.presto.common.function.OperatorType.GREATER_THAN_OR_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.IS_DISTINCT_FROM;
+import static com.facebook.presto.common.function.OperatorType.LESS_THAN;
+import static com.facebook.presto.common.function.OperatorType.LESS_THAN_OR_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.MODULUS;
+import static com.facebook.presto.common.function.OperatorType.MULTIPLY;
+import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.SUBTRACT;
+import static com.facebook.presto.common.type.StandardTypes.VARCHAR;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.COALESCE;
+import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.DEREFERENCE;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IN;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.IS_NULL;
 import static com.facebook.presto.spi.relation.SpecialFormExpression.Form.SWITCH;
@@ -78,7 +81,9 @@ import static com.facebook.presto.sql.planner.RowExpressionInterpreter.rowExpres
 import static com.facebook.presto.sql.tree.LogicalBinaryExpression.Operator.AND;
 import static com.facebook.presto.sql.tree.LogicalBinaryExpression.Operator.OR;
 import static com.google.common.base.Preconditions.checkState;
+import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
+import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -137,7 +142,8 @@ final class RowExpressionVerifier
             return false;
         }
 
-        if (!expected.getType().equals(actual.getType().toString())) {
+        if (!expected.getType().equalsIgnoreCase(actual.getType().toString()) &&
+                !(expected.getType().toLowerCase(ENGLISH).equals(VARCHAR) && actual.getType().getTypeSignature().getBase().equals(VARCHAR))) {
             return false;
         }
 
@@ -209,6 +215,11 @@ final class RowExpressionVerifier
             OperatorType actualOperatorType = functionMetadata.getOperatorType().get();
             OperatorType expectedOperatorType = getOperatorType(expected.getOperator());
             if (expectedOperatorType.equals(actualOperatorType)) {
+                if (actualOperatorType == EQUAL) {
+                    return (process(expected.getLeft(), ((CallExpression) actual).getArguments().get(0)) && process(expected.getRight(), ((CallExpression) actual).getArguments().get(1)))
+                            || (process(expected.getLeft(), ((CallExpression) actual).getArguments().get(1)) && process(expected.getRight(), ((CallExpression) actual).getArguments().get(0)));
+                }
+                // TODO support other comparison operators
                 return process(expected.getLeft(), ((CallExpression) actual).getArguments().get(0)) && process(expected.getRight(), ((CallExpression) actual).getArguments().get(1));
             }
         }
@@ -318,6 +329,28 @@ final class RowExpressionVerifier
         return compareLiteral(expected, actual);
     }
 
+    @Override
+    protected Boolean visitDereferenceExpression(DereferenceExpression expected, RowExpression actual)
+    {
+        if (!(actual instanceof SpecialFormExpression) || !(((SpecialFormExpression) actual).getForm().equals(DEREFERENCE))) {
+            return false;
+        }
+        SpecialFormExpression actualDereference = (SpecialFormExpression) actual;
+        if (actualDereference.getArguments().size() == 2 &&
+                actualDereference.getArguments().get(0).getType() instanceof RowType &&
+                actualDereference.getArguments().get(1) instanceof ConstantExpression) {
+            RowType rowType = (RowType) actualDereference.getArguments().get(0).getType();
+            Object value = LiteralInterpreter.evaluate(TEST_SESSION.toConnectorSession(), (ConstantExpression) actualDereference.getArguments().get(1));
+            checkState(value instanceof Long);
+            long index = (Long) value;
+            checkState(index >= 0 && index < rowType.getFields().size());
+            RowType.Field field = rowType.getFields().get(toIntExact(index));
+            checkState(field.getName().isPresent());
+            return expected.getField().getValue().equals(field.getName().get()) && process(expected.getBase(), actualDereference.getArguments().get(0));
+        }
+        return false;
+    }
+
     private static String getValueFromLiteral(Node expression)
     {
         if (expression instanceof LongLiteral) {
@@ -354,6 +387,12 @@ final class RowExpressionVerifier
     @Override
     protected Boolean visitStringLiteral(StringLiteral expected, RowExpression actual)
     {
+        if (actual instanceof CallExpression && functionResolution.isCastFunction(((CallExpression) actual).getFunctionHandle())) {
+            Object value = rowExpressionInterpreter(actual, metadata, session.toConnectorSession()).evaluate();
+            if (value instanceof Slice) {
+                return expected.getValue().equals(((Slice) value).toStringUtf8());
+            }
+        }
         if (actual instanceof ConstantExpression && actual.getType().getJavaType() == Slice.class) {
             String actualString = (String) LiteralInterpreter.evaluate(TEST_SESSION.toConnectorSession(), (ConstantExpression) actual);
             return expected.getValue().equals(actualString);
@@ -473,7 +512,7 @@ final class RowExpressionVerifier
         }
         CallExpression actualFunction = (CallExpression) actual;
 
-        if (!expected.getName().equals(QualifiedName.of(metadata.getFunctionManager().getFunctionMetadata(actualFunction.getFunctionHandle()).getName()))) {
+        if (!expected.getName().getSuffix().equals(metadata.getFunctionManager().getFunctionMetadata(actualFunction.getFunctionHandle()).getName().getFunctionName())) {
             return false;
         }
 

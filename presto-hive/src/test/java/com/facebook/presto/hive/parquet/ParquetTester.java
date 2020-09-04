@@ -13,6 +13,22 @@
  */
 package com.facebook.presto.hive.parquet;
 
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.PageBuilder;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.CharType;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Decimals;
+import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.SqlDate;
+import com.facebook.presto.common.type.SqlDecimal;
+import com.facebook.presto.common.type.SqlTimestamp;
+import com.facebook.presto.common.type.SqlVarbinary;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.HiveClientConfig;
 import com.facebook.presto.hive.HiveSessionProperties;
@@ -24,30 +40,22 @@ import com.facebook.presto.hive.parquet.write.MapKeyValuesSchemaConverter;
 import com.facebook.presto.hive.parquet.write.SingleLevelArrayMapKeyValuesSchemaConverter;
 import com.facebook.presto.hive.parquet.write.SingleLevelArraySchemaConverter;
 import com.facebook.presto.hive.parquet.write.TestMapredParquetOutputFormat;
+import com.facebook.presto.parquet.writer.ParquetWriter;
+import com.facebook.presto.parquet.writer.ParquetWriterOptions;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordPageSource;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.SqlDate;
-import com.facebook.presto.spi.type.SqlDecimal;
-import com.facebook.presto.spi.type.SqlTimestamp;
-import com.facebook.presto.spi.type.SqlVarbinary;
-import com.facebook.presto.spi.type.TimestampType;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.TestingConnectorSession;
 import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
@@ -68,6 +76,7 @@ import parquet.schema.MessageType;
 
 import java.io.Closeable;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
@@ -78,21 +87,39 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Properties;
 import java.util.Set;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.Chars.truncateToLengthAndTrimSpaces;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TimeZoneKey.UTC_KEY;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.Varchars.isVarcharType;
+import static com.facebook.presto.common.type.Varchars.truncateToLength;
 import static com.facebook.presto.hive.AbstractTestHiveFileFormats.getFieldFromCursor;
+import static com.facebook.presto.hive.HiveSessionProperties.getParquetMaxReadBlockSize;
+import static com.facebook.presto.hive.HiveTestUtils.METASTORE_CLIENT_CONFIG;
 import static com.facebook.presto.hive.HiveTestUtils.createTestHdfsEnvironment;
-import static com.facebook.presto.hive.HiveUtil.isArrayType;
-import static com.facebook.presto.hive.HiveUtil.isMapType;
-import static com.facebook.presto.hive.HiveUtil.isRowType;
 import static com.facebook.presto.hive.HiveUtil.isStructuralType;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.Varchars.isVarcharType;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.isArrayType;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.isMapType;
+import static com.facebook.presto.hive.metastore.MetastoreUtil.isRowType;
 import static com.google.common.base.Functions.constant;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Iterables.transform;
+import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.units.DataSize.succinctBytes;
+import static java.lang.Math.toIntExact;
 import static java.util.Arrays.stream;
 import static java.util.Collections.singletonList;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardStructObjectInspector;
@@ -111,14 +138,18 @@ import static parquet.hadoop.metadata.CompressionCodecName.UNCOMPRESSED;
 public class ParquetTester
 {
     public static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("America/Bahia_Banderas");
+    private static final int MAX_PRECISION_INT64 = toIntExact(maxPrecision(8));
     private static final boolean OPTIMIZED = true;
-    private static final HiveClientConfig HIVE_CLIENT_CONFIG = createHiveClientConfig(false);
-    private static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(HIVE_CLIENT_CONFIG);
+    private static final HiveClientConfig HIVE_CLIENT_CONFIG = createHiveClientConfig(false, false);
+    private static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(HIVE_CLIENT_CONFIG, METASTORE_CLIENT_CONFIG);
     private static final TestingConnectorSession SESSION = new TestingConnectorSession(new HiveSessionProperties(HIVE_CLIENT_CONFIG, new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
-    private static final TestingConnectorSession SESSION_USE_NAME = new TestingConnectorSession(new HiveSessionProperties(createHiveClientConfig(true), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
+    private static final TestingConnectorSession SESSION_USE_NAME = new TestingConnectorSession(new HiveSessionProperties(createHiveClientConfig(true, false), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
+    private static final TestingConnectorSession SESSION_USE_NAME_BATCH_READS = new TestingConnectorSession(new HiveSessionProperties(createHiveClientConfig(true, true), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
     private static final List<String> TEST_COLUMN = singletonList("test");
 
     private Set<CompressionCodecName> compressions = ImmutableSet.of();
+
+    private Set<CompressionCodecName> writerCompressions = ImmutableSet.of();
 
     private Set<WriterVersion> versions = ImmutableSet.of();
 
@@ -128,6 +159,7 @@ public class ParquetTester
     {
         ParquetTester parquetTester = new ParquetTester();
         parquetTester.compressions = ImmutableSet.of(GZIP);
+        parquetTester.writerCompressions = ImmutableSet.of(GZIP);
         parquetTester.versions = ImmutableSet.of(PARQUET_1_0);
         parquetTester.sessions = ImmutableSet.of(SESSION);
         return parquetTester;
@@ -137,8 +169,9 @@ public class ParquetTester
     {
         ParquetTester parquetTester = new ParquetTester();
         parquetTester.compressions = ImmutableSet.of(GZIP, UNCOMPRESSED, SNAPPY, LZO);
+        parquetTester.writerCompressions = ImmutableSet.of(GZIP, UNCOMPRESSED, SNAPPY);
         parquetTester.versions = ImmutableSet.copyOf(WriterVersion.values());
-        parquetTester.sessions = ImmutableSet.of(SESSION, SESSION_USE_NAME);
+        parquetTester.sessions = ImmutableSet.of(SESSION, SESSION_USE_NAME, SESSION_USE_NAME_BATCH_READS);
         return parquetTester;
     }
 
@@ -204,13 +237,27 @@ public class ParquetTester
     public void testRoundTrip(ObjectInspector objectInspector, Iterable<?> writeValues, Iterable<?> readValues, String columnName, Type type, Optional<MessageType> parquetSchema)
             throws Exception
     {
-        testRoundTrip(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, singletonList(columnName), singletonList(type), parquetSchema, false);
+        testRoundTrip(
+                singletonList(objectInspector),
+                new Iterable<?>[] {writeValues},
+                new Iterable<?>[] {readValues},
+                singletonList(columnName),
+                singletonList(type),
+                parquetSchema,
+                false);
     }
 
     public void testSingleLevelArrayRoundTrip(ObjectInspector objectInspector, Iterable<?> writeValues, Iterable<?> readValues, String columnName, Type type, Optional<MessageType> parquetSchema)
             throws Exception
     {
-        testRoundTrip(singletonList(objectInspector), new Iterable<?>[] {writeValues}, new Iterable<?>[] {readValues}, singletonList(columnName), singletonList(type), parquetSchema, true);
+        testRoundTrip(
+                singletonList(objectInspector),
+                new Iterable<?>[] {writeValues},
+                new Iterable<?>[] {readValues},
+                singletonList(columnName),
+                singletonList(type),
+                parquetSchema,
+                true);
     }
 
     public void testRoundTrip(List<ObjectInspector> objectInspectors, Iterable<?>[] writeValues, Iterable<?>[] readValues, List<String> columnNames, List<Type> columnTypes, Optional<MessageType> parquetSchema, boolean singleLevelArray)
@@ -223,8 +270,14 @@ public class ParquetTester
         assertRoundTrip(objectInspectors, transformToNulls(writeValues), transformToNulls(readValues), columnNames, columnTypes, parquetSchema, singleLevelArray);
     }
 
-    private void testRoundTripType(List<ObjectInspector> objectInspectors, Iterable<?>[] writeValues, Iterable<?>[] readValues,
-            List<String> columnNames, List<Type> columnTypes, Optional<MessageType> parquetSchema, boolean singleLevelArray)
+    private void testRoundTripType(
+            List<ObjectInspector> objectInspectors,
+            Iterable<?>[] writeValues,
+            Iterable<?>[] readValues,
+            List<String> columnNames,
+            List<Type> columnTypes,
+            Optional<MessageType> parquetSchema,
+            boolean singleLevelArray)
             throws Exception
     {
         // forward order
@@ -240,7 +293,8 @@ public class ParquetTester
         assertRoundTrip(objectInspectors, insertNullEvery(5, reverse(writeValues)), insertNullEvery(5, reverse(readValues)), columnNames, columnTypes, parquetSchema, singleLevelArray);
     }
 
-    void assertRoundTrip(List<ObjectInspector> objectInspectors,
+    void assertRoundTrip(
+            List<ObjectInspector> objectInspectors,
             Iterable<?>[] writeValues,
             Iterable<?>[] readValues,
             List<String> columnNames,
@@ -251,7 +305,8 @@ public class ParquetTester
         assertRoundTrip(objectInspectors, writeValues, readValues, columnNames, columnTypes, parquetSchema, false);
     }
 
-    void assertRoundTrip(List<ObjectInspector> objectInspectors,
+    void assertRoundTrip(
+            List<ObjectInspector> objectInspectors,
             Iterable<?>[] writeValues,
             Iterable<?>[] readValues,
             List<String> columnNames,
@@ -287,6 +342,86 @@ public class ParquetTester
                 }
             }
         }
+
+        // write presto parquet
+        for (CompressionCodecName compressionCodecName : writerCompressions) {
+            for (ConnectorSession session : sessions) {
+                try (TempFile tempFile = new TempFile("test", "parquet")) {
+                    OptionalInt min = stream(writeValues).mapToInt(Iterables::size).min();
+                    checkState(min.isPresent());
+                    writeParquetColumnPresto(tempFile.getFile(), columnTypes, columnNames, getIterators(readValues), min.getAsInt(), compressionCodecName);
+                    assertFileContents(
+                            session,
+                            tempFile.getFile(),
+                            getIterators(readValues),
+                            columnNames,
+                            columnTypes);
+                }
+            }
+        }
+    }
+
+    void testMaxReadBytes(ObjectInspector objectInspector, Iterable<?> writeValues, Iterable<?> readValues, Type type, DataSize maxReadBlockSize)
+            throws Exception
+    {
+        assertMaxReadBytes(
+                singletonList(objectInspector),
+                new Iterable<?>[] {writeValues},
+                new Iterable<?>[] {readValues},
+                TEST_COLUMN,
+                singletonList(type),
+                Optional.empty(),
+                maxReadBlockSize);
+    }
+
+    void assertMaxReadBytes(
+            List<ObjectInspector> objectInspectors,
+            Iterable<?>[] writeValues,
+            Iterable<?>[] readValues,
+            List<String> columnNames,
+            List<Type> columnTypes,
+            Optional<MessageType> parquetSchema,
+            DataSize maxReadBlockSize)
+            throws Exception
+    {
+        WriterVersion version = PARQUET_1_0;
+        CompressionCodecName compressionCodecName = UNCOMPRESSED;
+        HiveClientConfig config = new HiveClientConfig()
+                .setHiveStorageFormat(HiveStorageFormat.PARQUET)
+                .setUseParquetColumnNames(false)
+                .setParquetMaxReadBlockSize(maxReadBlockSize);
+        ConnectorSession session = new TestingConnectorSession(new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
+
+        try (TempFile tempFile = new TempFile("test", "parquet")) {
+            JobConf jobConf = new JobConf();
+            jobConf.setEnum(COMPRESSION, compressionCodecName);
+            jobConf.setBoolean(ENABLE_DICTIONARY, true);
+            jobConf.setEnum(WRITER_VERSION, version);
+            writeParquetColumn(
+                    jobConf,
+                    tempFile.getFile(),
+                    compressionCodecName,
+                    createTableProperties(columnNames, objectInspectors),
+                    getStandardStructObjectInspector(columnNames, objectInspectors),
+                    getIterators(writeValues),
+                    parquetSchema,
+                    false);
+
+            Iterator<?>[] expectedValues = getIterators(readValues);
+            try (ConnectorPageSource pageSource = getFileFormat().createFileFormatReader(
+                    session,
+                    HDFS_ENVIRONMENT,
+                    tempFile.getFile(),
+                    columnNames,
+                    columnTypes)) {
+                assertPageSource(
+                        columnTypes,
+                        expectedValues,
+                        pageSource,
+                        Optional.of(getParquetMaxReadBlockSize(session).toBytes()));
+                assertFalse(stream(expectedValues).allMatch(Iterator::hasNext));
+            }
+        }
     }
 
     private static void assertFileContents(
@@ -315,8 +450,17 @@ public class ParquetTester
 
     private static void assertPageSource(List<Type> types, Iterator<?>[] valuesByField, ConnectorPageSource pageSource)
     {
+        assertPageSource(types, valuesByField, pageSource, Optional.empty());
+    }
+
+    private static void assertPageSource(List<Type> types, Iterator<?>[] valuesByField, ConnectorPageSource pageSource, Optional<Long> maxReadBlockSize)
+    {
         Page page;
         while ((page = pageSource.getNextPage()) != null) {
+            if (maxReadBlockSize.isPresent()) {
+                assertTrue(page.getPositionCount() == 1 || page.getSizeInBytes() <= maxReadBlockSize.get());
+            }
+
             for (int field = 0; field < page.getChannelCount(); field++) {
                 Block block = page.getBlock(field);
                 for (int i = 0; i < block.getPositionCount(); i++) {
@@ -371,10 +515,10 @@ public class ParquetTester
         if (VARBINARY.equals(type)) {
             return new SqlVarbinary(((Slice) fieldFromCursor).getBytes());
         }
-        if (DateType.DATE.equals(type)) {
+        if (DATE.equals(type)) {
             return new SqlDate(((Long) fieldFromCursor).intValue());
         }
-        if (TimestampType.TIMESTAMP.equals(type)) {
+        if (TIMESTAMP.equals(type)) {
             return new SqlTimestamp((long) fieldFromCursor, UTC_KEY);
         }
         return fieldFromCursor;
@@ -384,7 +528,7 @@ public class ParquetTester
     {
         Map<Object, Object> map = new HashMap<>(mapBlock.getPositionCount() * 2);
         for (int i = 0; i < mapBlock.getPositionCount(); i += 2) {
-            map.put(keyType.getObjectValue(SESSION, mapBlock, i), valueType.getObjectValue(SESSION, mapBlock, i + 1));
+            map.put(keyType.getObjectValue(SESSION.getSqlFunctionProperties(), mapBlock, i), valueType.getObjectValue(SESSION.getSqlFunctionProperties(), mapBlock, i + 1));
         }
         return Collections.unmodifiableMap(map);
     }
@@ -393,7 +537,7 @@ public class ParquetTester
     {
         List<Object> values = new ArrayList<>();
         for (int position = 0; position < arrayBlock.getPositionCount(); position++) {
-            values.add(elementType.getObjectValue(SESSION, arrayBlock, position));
+            values.add(elementType.getObjectValue(SESSION.getSqlFunctionProperties(), arrayBlock, position));
         }
         return Collections.unmodifiableList(values);
     }
@@ -402,16 +546,17 @@ public class ParquetTester
     {
         List<Object> values = new ArrayList<>(rowBlock.getPositionCount());
         for (int i = 0; i < rowBlock.getPositionCount(); i++) {
-            values.add(fieldTypes.get(i).getObjectValue(SESSION, rowBlock, i));
+            values.add(fieldTypes.get(i).getObjectValue(SESSION.getSqlFunctionProperties(), rowBlock, i));
         }
         return Collections.unmodifiableList(values);
     }
 
-    private static HiveClientConfig createHiveClientConfig(boolean useParquetColumnNames)
+    private static HiveClientConfig createHiveClientConfig(boolean useParquetColumnNames, boolean batchReadsEnabled)
     {
         HiveClientConfig config = new HiveClientConfig();
         config.setHiveStorageFormat(HiveStorageFormat.PARQUET)
-                .setUseParquetColumnNames(useParquetColumnNames);
+                .setUseParquetColumnNames(useParquetColumnNames)
+                .setParquetBatchReadOptimizationEnabled(batchReadsEnabled);
         return config;
     }
 
@@ -420,7 +565,8 @@ public class ParquetTester
         return OPTIMIZED ? FileFormat.PRESTO_PARQUET : FileFormat.HIVE_PARQUET;
     }
 
-    private static DataSize writeParquetColumn(JobConf jobConf,
+    private static DataSize writeParquetColumn(
+            JobConf jobConf,
             File outputFile,
             CompressionCodecName compressionCodecName,
             Properties tableProperties,
@@ -548,6 +694,130 @@ public class ParquetTester
             return null;
         }
 
-        return type.getObjectValue(SESSION, block, position);
+        return type.getObjectValue(SESSION.getSqlFunctionProperties(), block, position);
+    }
+
+    private static void writeParquetColumnPresto(File outputFile, List<Type> types, List<String> columnNames, Iterator<?>[] values, int size, CompressionCodecName compressionCodecName)
+            throws Exception
+    {
+        checkArgument(types.size() == columnNames.size() && types.size() == values.length);
+        ParquetWriter writer = new ParquetWriter(
+                new FileOutputStream(outputFile),
+                columnNames,
+                types,
+                ParquetWriterOptions.builder()
+                        .setMaxPageSize(DataSize.succinctBytes(100))
+                        .setMaxBlockSize(DataSize.succinctBytes(100000))
+                        .build(),
+                compressionCodecName.getHadoopCompressionCodecClassName());
+
+        PageBuilder pageBuilder = new PageBuilder(types);
+        for (int i = 0; i < types.size(); ++i) {
+            Type type = types.get(i);
+            Iterator<?> iterator = values[i];
+            BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(i);
+
+            for (int j = 0; j < size; ++j) {
+                checkState(iterator.hasNext());
+                Object value = iterator.next();
+                writeValue(type, blockBuilder, value);
+            }
+        }
+        pageBuilder.declarePositions(size);
+        writer.write(pageBuilder.build());
+        writer.close();
+    }
+
+    private static void writeValue(Type type, BlockBuilder blockBuilder, Object value)
+    {
+        if (value == null) {
+            blockBuilder.appendNull();
+        }
+        else {
+            if (BOOLEAN.equals(type)) {
+                type.writeBoolean(blockBuilder, (Boolean) value);
+            }
+            else if (TINYINT.equals(type) || SMALLINT.equals(type) || INTEGER.equals(type) || BIGINT.equals(type)) {
+                type.writeLong(blockBuilder, ((Number) value).longValue());
+            }
+            else if (Decimals.isShortDecimal(type)) {
+                type.writeLong(blockBuilder, ((SqlDecimal) value).getUnscaledValue().longValue());
+            }
+            else if (Decimals.isLongDecimal(type)) {
+                if (Decimals.overflows(((SqlDecimal) value).getUnscaledValue(), MAX_PRECISION_INT64)) {
+                    type.writeSlice(blockBuilder, Decimals.encodeUnscaledValue(((SqlDecimal) value).toBigDecimal().unscaledValue()));
+                }
+                else {
+                    type.writeSlice(blockBuilder, Decimals.encodeUnscaledValue(((SqlDecimal) value).getUnscaledValue().longValue()));
+                }
+            }
+            else if (DOUBLE.equals(type)) {
+                type.writeDouble(blockBuilder, ((Number) value).doubleValue());
+            }
+            else if (REAL.equals(type)) {
+                float floatValue = ((Number) value).floatValue();
+                type.writeLong(blockBuilder, Float.floatToIntBits(floatValue));
+            }
+            else if (type instanceof VarcharType) {
+                Slice slice = truncateToLength(utf8Slice((String) value), type);
+                type.writeSlice(blockBuilder, slice);
+            }
+            else if (type instanceof CharType) {
+                Slice slice = truncateToLengthAndTrimSpaces(utf8Slice((String) value), type);
+                type.writeSlice(blockBuilder, slice);
+            }
+            else if (VARBINARY.equals(type)) {
+                type.writeSlice(blockBuilder, Slices.wrappedBuffer(((SqlVarbinary) value).getBytes()));
+            }
+            else if (DATE.equals(type)) {
+                long days = ((SqlDate) value).getDays();
+                type.writeLong(blockBuilder, days);
+            }
+            else if (TIMESTAMP.equals(type)) {
+                long millis = ((SqlTimestamp) value).getMillisUtc();
+                type.writeLong(blockBuilder, millis);
+            }
+            else {
+                if (type instanceof ArrayType) {
+                    List<?> array = (List<?>) value;
+                    Type elementType = type.getTypeParameters().get(0);
+                    BlockBuilder arrayBlockBuilder = blockBuilder.beginBlockEntry();
+                    for (Object elementValue : array) {
+                        writeValue(elementType, arrayBlockBuilder, elementValue);
+                    }
+                    blockBuilder.closeEntry();
+                }
+                else if (type instanceof MapType) {
+                    Map<?, ?> map = (Map<?, ?>) value;
+                    Type keyType = type.getTypeParameters().get(0);
+                    Type valueType = type.getTypeParameters().get(1);
+                    BlockBuilder mapBlockBuilder = blockBuilder.beginBlockEntry();
+                    for (Map.Entry<?, ?> entry : map.entrySet()) {
+                        writeValue(keyType, mapBlockBuilder, entry.getKey());
+                        writeValue(valueType, mapBlockBuilder, entry.getValue());
+                    }
+                    blockBuilder.closeEntry();
+                }
+                else if (type instanceof RowType) {
+                    List<?> array = (List<?>) value;
+                    List<Type> fieldTypes = type.getTypeParameters();
+                    BlockBuilder rowBlockBuilder = blockBuilder.beginBlockEntry();
+                    for (int fieldId = 0; fieldId < fieldTypes.size(); fieldId++) {
+                        Type fieldType = fieldTypes.get(fieldId);
+                        writeValue(fieldType, rowBlockBuilder, array.get(fieldId));
+                    }
+                    blockBuilder.closeEntry();
+                }
+                else {
+                    throw new IllegalArgumentException("Unsupported type " + type);
+                }
+            }
+        }
+    }
+
+    // copied from Parquet code to determine the max decimal precision supported by INT32/INT64
+    private static long maxPrecision(int numBytes)
+    {
+        return Math.round(Math.floor(Math.log10(Math.pow(2, 8 * numBytes - 1) - 1)));
     }
 }

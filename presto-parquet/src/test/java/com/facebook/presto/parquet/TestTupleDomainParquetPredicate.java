@@ -13,16 +13,17 @@
  */
 package com.facebook.presto.parquet;
 
+import com.facebook.presto.common.predicate.Domain;
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.predicate.ValueSet;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.parquet.predicate.DictionaryDescriptor;
 import com.facebook.presto.parquet.predicate.TupleDomainParquetPredicate;
-import com.facebook.presto.spi.predicate.Domain;
-import com.facebook.presto.spi.predicate.TupleDomain;
-import com.facebook.presto.spi.predicate.ValueSet;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import org.apache.parquet.bytes.LittleEndianDataOutputStream;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.statistics.BooleanStatistics;
 import org.apache.parquet.column.statistics.DoubleStatistics;
@@ -34,29 +35,30 @@ import org.apache.parquet.schema.PrimitiveType;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.common.predicate.Domain.create;
+import static com.facebook.presto.common.predicate.Domain.notNull;
+import static com.facebook.presto.common.predicate.Domain.singleValue;
+import static com.facebook.presto.common.predicate.Range.range;
+import static com.facebook.presto.common.predicate.TupleDomain.withColumnDomains;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.VarcharType.createUnboundedVarcharType;
+import static com.facebook.presto.common.type.VarcharType.createVarcharType;
 import static com.facebook.presto.parquet.ParquetEncoding.PLAIN_DICTIONARY;
 import static com.facebook.presto.parquet.predicate.TupleDomainParquetPredicate.getDomain;
-import static com.facebook.presto.spi.predicate.Domain.all;
-import static com.facebook.presto.spi.predicate.Domain.create;
-import static com.facebook.presto.spi.predicate.Domain.notNull;
-import static com.facebook.presto.spi.predicate.Domain.singleValue;
-import static com.facebook.presto.spi.predicate.Range.range;
-import static com.facebook.presto.spi.predicate.TupleDomain.withColumnDomains;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
-import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static io.airlift.slice.Slices.EMPTY_SLICE;
 import static io.airlift.slice.Slices.utf8Slice;
+import static java.lang.Float.NaN;
 import static java.lang.Float.floatToRawIntBits;
 import static java.util.Collections.singletonList;
 import static java.util.Collections.singletonMap;
@@ -80,12 +82,12 @@ public class TestTupleDomainParquetPredicate
             throws ParquetCorruptionException
     {
         String column = "BooleanColumn";
-        assertEquals(getDomain(BOOLEAN, 0, null, ID, column, true), all(BOOLEAN));
+        assertEquals(getDomain(BOOLEAN, 0, null, ID, column, true), Domain.all(BOOLEAN));
 
         assertEquals(getDomain(BOOLEAN, 10, booleanColumnStats(true, true), ID, column, true), singleValue(BOOLEAN, true));
         assertEquals(getDomain(BOOLEAN, 10, booleanColumnStats(false, false), ID, column, true), singleValue(BOOLEAN, false));
 
-        assertEquals(getDomain(BOOLEAN, 20, booleanColumnStats(false, true), ID, column, true), all(BOOLEAN));
+        assertEquals(getDomain(BOOLEAN, 20, booleanColumnStats(false, true), ID, column, true), Domain.all(BOOLEAN));
     }
 
     private static BooleanStatistics booleanColumnStats(boolean minimum, boolean maximum)
@@ -100,11 +102,13 @@ public class TestTupleDomainParquetPredicate
             throws ParquetCorruptionException
     {
         String column = "BigintColumn";
-        assertEquals(getDomain(BIGINT, 0, null, ID, column, true), all(BIGINT));
+        assertEquals(getDomain(BIGINT, 0, null, ID, column, true), Domain.all(BIGINT));
 
         assertEquals(getDomain(BIGINT, 10, longColumnStats(100L, 100L), ID, column, true), singleValue(BIGINT, 100L));
 
         assertEquals(getDomain(BIGINT, 10, longColumnStats(0L, 100L), ID, column, true), create(ValueSet.ofRanges(range(BIGINT, 0L, true, 100L, true)), false));
+
+        assertEquals(getDomain(BIGINT, 20, longOnlyNullsStats(10), ID, column, true), create(ValueSet.all(BIGINT), true));
         // ignore corrupted statistics
         assertEquals(getDomain(BIGINT, 10, longColumnStats(100L, 0L), ID, column, false), create(ValueSet.all(BIGINT), false));
         // fail on corrupted statistics
@@ -118,13 +122,15 @@ public class TestTupleDomainParquetPredicate
             throws ParquetCorruptionException
     {
         String column = "IntegerColumn";
-        assertEquals(getDomain(INTEGER, 0, null, ID, column, true), all(INTEGER));
+        assertEquals(getDomain(INTEGER, 0, null, ID, column, true), Domain.all(INTEGER));
 
         assertEquals(getDomain(INTEGER, 10, longColumnStats(100, 100), ID, column, true), singleValue(INTEGER, 100L));
 
         assertEquals(getDomain(INTEGER, 10, longColumnStats(0, 100), ID, column, true), create(ValueSet.ofRanges(range(INTEGER, 0L, true, 100L, true)), false));
 
         assertEquals(getDomain(INTEGER, 20, longColumnStats(0, 2147483648L), ID, column, true), notNull(INTEGER));
+
+        assertEquals(getDomain(INTEGER, 20, longOnlyNullsStats(10), ID, column, true), create(ValueSet.all(INTEGER), true));
         // ignore corrupted statistics
         assertEquals(getDomain(INTEGER, 10, longColumnStats(2147483648L, 0), ID, column, false), create(ValueSet.all(INTEGER), false));
         // fail on corrupted statistics
@@ -138,13 +144,15 @@ public class TestTupleDomainParquetPredicate
             throws ParquetCorruptionException
     {
         String column = "SmallintColumn";
-        assertEquals(getDomain(SMALLINT, 0, null, ID, column, true), all(SMALLINT));
+        assertEquals(getDomain(SMALLINT, 0, null, ID, column, true), Domain.all(SMALLINT));
 
         assertEquals(getDomain(SMALLINT, 10, longColumnStats(100, 100), ID, column, true), singleValue(SMALLINT, 100L));
 
         assertEquals(getDomain(SMALLINT, 10, longColumnStats(0, 100), ID, column, true), create(ValueSet.ofRanges(range(SMALLINT, 0L, true, 100L, true)), false));
 
         assertEquals(getDomain(SMALLINT, 20, longColumnStats(0, 2147483648L), ID, column, true), notNull(SMALLINT));
+
+        assertEquals(getDomain(SMALLINT, 20, longOnlyNullsStats(10), ID, column, true), create(ValueSet.all(SMALLINT), true));
         // ignore corrupted statistics
         assertEquals(getDomain(SMALLINT, 10, longColumnStats(2147483648L, 0), ID, column, false), create(ValueSet.all(SMALLINT), false));
         // fail on corrupted statistics
@@ -158,7 +166,7 @@ public class TestTupleDomainParquetPredicate
             throws ParquetCorruptionException
     {
         String column = "TinyintColumn";
-        assertEquals(getDomain(TINYINT, 0, null, ID, column, true), all(TINYINT));
+        assertEquals(getDomain(TINYINT, 0, null, ID, column, true), Domain.all(TINYINT));
 
         assertEquals(getDomain(TINYINT, 10, longColumnStats(100, 100), ID, column, true), singleValue(TINYINT, 100L));
 
@@ -166,6 +174,7 @@ public class TestTupleDomainParquetPredicate
 
         assertEquals(getDomain(TINYINT, 20, longColumnStats(0, 2147483648L), ID, column, true), notNull(TINYINT));
 
+        assertEquals(getDomain(TINYINT, 20, longOnlyNullsStats(10), ID, column, true), create(ValueSet.all(TINYINT), true));
         // ignore corrupted statistics
         assertEquals(getDomain(TINYINT, 10, longColumnStats(2147483648L, 0), ID, column, false), create(ValueSet.all(TINYINT), false));
         // fail on corrupted statistics
@@ -176,14 +185,26 @@ public class TestTupleDomainParquetPredicate
 
     @Test
     public void testDouble()
-            throws ParquetCorruptionException
+            throws Exception
     {
         String column = "DoubleColumn";
-        assertEquals(getDomain(DOUBLE, 0, null, ID, column, true), all(DOUBLE));
+        assertEquals(getDomain(DOUBLE, 0, null, ID, column, true), Domain.all(DOUBLE));
 
         assertEquals(getDomain(DOUBLE, 10, doubleColumnStats(42.24, 42.24), ID, column, true), singleValue(DOUBLE, 42.24));
 
         assertEquals(getDomain(DOUBLE, 10, doubleColumnStats(3.3, 42.24), ID, column, true), create(ValueSet.ofRanges(range(DOUBLE, 3.3, true, 42.24, true)), false));
+
+        assertEquals(getDomain(DOUBLE, 10, doubleColumnStats(NaN, NaN), ID, column, true), Domain.notNull(DOUBLE));
+
+        assertEquals(getDomain(DOUBLE, 10, doubleColumnStats(NaN, NaN, true), ID, column, true), Domain.all(DOUBLE));
+
+        assertEquals(getDomain(DOUBLE, 10, doubleColumnStats(3.3, NaN), ID, column, true), Domain.notNull(DOUBLE));
+
+        assertEquals(getDomain(DOUBLE, 10, doubleColumnStats(3.3, NaN, true), ID, column, true), Domain.all(DOUBLE));
+
+        assertEquals(getDomain(DOUBLE, doubleDictionaryDescriptor(NaN)), Domain.all(DOUBLE));
+
+        assertEquals(getDomain(DOUBLE, doubleDictionaryDescriptor(3.3, NaN)), Domain.all(DOUBLE));
 
         // ignore corrupted statistics
         assertEquals(getDomain(DOUBLE, 10, doubleColumnStats(42.24, 3.3), ID, column, false), create(ValueSet.all(DOUBLE), false));
@@ -193,19 +214,12 @@ public class TestTupleDomainParquetPredicate
                 .withMessage("Corrupted statistics for column \"DoubleColumn\" in Parquet file \"testFile\": [min: 42.24, max: 3.3, num_nulls: 0]");
     }
 
-    private static DoubleStatistics doubleColumnStats(double minimum, double maximum)
-    {
-        DoubleStatistics statistics = new DoubleStatistics();
-        statistics.setMinMax(minimum, maximum);
-        return statistics;
-    }
-
     @Test
     public void testString()
             throws ParquetCorruptionException
     {
         String column = "StringColumn";
-        assertEquals(getDomain(createUnboundedVarcharType(), 0, null, ID, column, true), all(createUnboundedVarcharType()));
+        assertEquals(getDomain(createUnboundedVarcharType(), 0, null, ID, column, true), Domain.all(createUnboundedVarcharType()));
 
         assertEquals(getDomain(createUnboundedVarcharType(), 10, stringColumnStats("taco", "taco"), ID, column, true), singleValue(createUnboundedVarcharType(), utf8Slice("taco")));
 
@@ -232,10 +246,10 @@ public class TestTupleDomainParquetPredicate
 
     @Test
     public void testFloat()
-            throws ParquetCorruptionException
+            throws Exception
     {
         String column = "FloatColumn";
-        assertEquals(getDomain(REAL, 0, null, ID, column, true), all(REAL));
+        assertEquals(getDomain(REAL, 0, null, ID, column, true), Domain.all(REAL));
 
         float minimum = 4.3f;
         float maximum = 40.3f;
@@ -245,6 +259,18 @@ public class TestTupleDomainParquetPredicate
         assertEquals(
                 getDomain(REAL, 10, floatColumnStats(minimum, maximum), ID, column, true),
                 create(ValueSet.ofRanges(range(REAL, (long) floatToRawIntBits(minimum), true, (long) floatToRawIntBits(maximum), true)), false));
+
+        assertEquals(getDomain(REAL, 10, floatColumnStats(NaN, NaN), ID, column, true), Domain.notNull(REAL));
+
+        assertEquals(getDomain(REAL, 10, floatColumnStats(NaN, NaN, true), ID, column, true), Domain.all(REAL));
+
+        assertEquals(getDomain(REAL, 10, floatColumnStats(minimum, NaN), ID, column, true), Domain.notNull(REAL));
+
+        assertEquals(getDomain(REAL, 10, floatColumnStats(minimum, NaN, true), ID, column, true), Domain.all(REAL));
+
+        assertEquals(getDomain(REAL, floatDictionaryDescriptor(NaN)), Domain.all(REAL));
+
+        assertEquals(getDomain(REAL, floatDictionaryDescriptor(minimum, NaN)), Domain.all(REAL));
 
         // ignore corrupted statistics
         assertEquals(getDomain(REAL, 10, floatColumnStats(maximum, minimum), ID, column, false), create(ValueSet.all(REAL), false));
@@ -259,7 +285,7 @@ public class TestTupleDomainParquetPredicate
             throws ParquetCorruptionException
     {
         String column = "DateColumn";
-        assertEquals(getDomain(DATE, 0, null, ID, column, true), all(DATE));
+        assertEquals(getDomain(DATE, 0, null, ID, column, true), Domain.all(DATE));
         assertEquals(getDomain(DATE, 10, intColumnStats(100, 100), ID, column, true), singleValue(DATE, 100L));
         assertEquals(getDomain(DATE, 10, intColumnStats(0, 100), ID, column, true), create(ValueSet.ofRanges(range(DATE, 0L, true, 100L, true)), false));
 
@@ -338,7 +364,7 @@ public class TestTupleDomainParquetPredicate
         TupleDomain<ColumnDescriptor> effectivePredicate = getEffectivePredicate(column, createVarcharType(255), EMPTY_SLICE);
         TupleDomainParquetPredicate parquetPredicate = new TupleDomainParquetPredicate(effectivePredicate, singletonList(column));
         DictionaryPage page = new DictionaryPage(Slices.wrappedBuffer(new byte[] {0, 0, 0, 0}), 1, PLAIN_DICTIONARY);
-        assertTrue(parquetPredicate.matches(singletonMap(column, new DictionaryDescriptor(column, Optional.of(page)))));
+        assertTrue(parquetPredicate.matches(new DictionaryDescriptor(column, Optional.of(page))));
     }
 
     private TupleDomain<ColumnDescriptor> getEffectivePredicate(RichColumnDescriptor column, VarcharType type, Slice value)
@@ -349,10 +375,33 @@ public class TestTupleDomainParquetPredicate
         return withColumnDomains(predicateColumns);
     }
 
+    private static DoubleStatistics doubleColumnStats(double minimum, double maximum)
+    {
+        return doubleColumnStats(minimum, maximum, false);
+    }
+
+    private static DoubleStatistics doubleColumnStats(double minimum, double maximum, boolean hasNulls)
+    {
+        DoubleStatistics statistics = new DoubleStatistics();
+        statistics.setMinMax(minimum, maximum);
+        if (hasNulls) {
+            statistics.setNumNulls(1);
+        }
+        return statistics;
+    }
+
     private static FloatStatistics floatColumnStats(float minimum, float maximum)
+    {
+        return floatColumnStats(minimum, maximum, false);
+    }
+
+    private static FloatStatistics floatColumnStats(float minimum, float maximum, boolean hasNulls)
     {
         FloatStatistics statistics = new FloatStatistics();
         statistics.setMinMax(minimum, maximum);
+        if (hasNulls) {
+            statistics.setNumNulls(1);
+        }
         return statistics;
     }
 
@@ -367,6 +416,41 @@ public class TestTupleDomainParquetPredicate
     {
         LongStatistics statistics = new LongStatistics();
         statistics.setMinMax(minimum, maximum);
+        return statistics;
+    }
+
+    private DictionaryDescriptor floatDictionaryDescriptor(float... values)
+            throws Exception
+    {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        try (LittleEndianDataOutputStream out = new LittleEndianDataOutputStream(buffer)) {
+            for (float value : values) {
+                out.writeFloat(value);
+            }
+        }
+        return new DictionaryDescriptor(
+                new ColumnDescriptor(new String[] {"dummy"}, new PrimitiveType(OPTIONAL, PrimitiveType.PrimitiveTypeName.FLOAT, 0, ""), 1, 1),
+                Optional.of(new DictionaryPage(Slices.wrappedBuffer(buffer.toByteArray()), values.length, PLAIN_DICTIONARY)));
+    }
+
+    private DictionaryDescriptor doubleDictionaryDescriptor(double... values)
+            throws Exception
+    {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        try (LittleEndianDataOutputStream out = new LittleEndianDataOutputStream(buffer)) {
+            for (double value : values) {
+                out.writeDouble(value);
+            }
+        }
+        return new DictionaryDescriptor(
+                new ColumnDescriptor(new String[] {"dummy"}, new PrimitiveType(OPTIONAL, PrimitiveType.PrimitiveTypeName.DOUBLE, 0, ""), 1, 1),
+                Optional.of(new DictionaryPage(Slices.wrappedBuffer(buffer.toByteArray()), values.length, PLAIN_DICTIONARY)));
+    }
+
+    private static LongStatistics longOnlyNullsStats(long numNulls)
+    {
+        LongStatistics statistics = new LongStatistics();
+        statistics.setNumNulls(numNulls);
         return statistics;
     }
 }

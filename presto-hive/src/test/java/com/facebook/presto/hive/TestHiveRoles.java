@@ -14,9 +14,9 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.security.SelectedRole;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.tests.AbstractTestQueryFramework;
 import com.google.common.collect.ImmutableList;
@@ -30,7 +30,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
+import static com.facebook.presto.common.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.tests.QueryAssertions.assertContains;
 import static com.facebook.presto.tests.QueryAssertions.assertEqualsIgnoreOrder;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -376,22 +376,52 @@ public class TestHiveRoles
                 .setIdentity(new Identity("set_user_1", Optional.empty()))
                 .build();
         Session setRoleAll = Session.builder(getQueryRunner().getDefaultSession())
-                .setIdentity(new Identity("set_user_1", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ALL, Optional.empty()))))
+                .setIdentity(new Identity(
+                        "set_user_1",
+                        Optional.empty(),
+                        ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ALL, Optional.empty())),
+                        ImmutableMap.of(),
+                        ImmutableMap.of()))
                 .build();
         Session setRoleNone = Session.builder(getQueryRunner().getDefaultSession())
-                .setIdentity(new Identity("set_user_1", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.NONE, Optional.empty()))))
+                .setIdentity(new Identity(
+                        "set_user_1",
+                        Optional.empty(),
+                        ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.NONE, Optional.empty())),
+                        ImmutableMap.of(),
+                        ImmutableMap.of()))
                 .build();
         Session setRole1 = Session.builder(getQueryRunner().getDefaultSession())
-                .setIdentity(new Identity("set_user_1", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_1")))))
+                .setIdentity(new Identity(
+                        "set_user_1",
+                        Optional.empty(),
+                        ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_1"))),
+                        ImmutableMap.of(),
+                        ImmutableMap.of()))
                 .build();
         Session setRole2 = Session.builder(getQueryRunner().getDefaultSession())
-                .setIdentity(new Identity("set_user_1", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_2")))))
+                .setIdentity(new Identity(
+                        "set_user_1",
+                        Optional.empty(),
+                        ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_2"))),
+                        ImmutableMap.of(),
+                        ImmutableMap.of()))
                 .build();
         Session setRole3 = Session.builder(getQueryRunner().getDefaultSession())
-                .setIdentity(new Identity("set_user_1", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_3")))))
+                .setIdentity(new Identity(
+                        "set_user_1",
+                        Optional.empty(),
+                        ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_3"))),
+                        ImmutableMap.of(),
+                        ImmutableMap.of()))
                 .build();
         Session setRole4 = Session.builder(getQueryRunner().getDefaultSession())
-                .setIdentity(new Identity("set_user_1", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_4")))))
+                .setIdentity(new Identity(
+                        "set_user_1",
+                        Optional.empty(),
+                        ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("set_role_4"))),
+                        ImmutableMap.of(),
+                        ImmutableMap.of()))
                 .build();
 
         MaterializedResult actual = getQueryRunner().execute(unsetRole, "SELECT * FROM hive.information_schema.applicable_roles");
@@ -509,7 +539,12 @@ public class TestHiveRoles
     private Session createAdminSession()
     {
         return Session.builder(getQueryRunner().getDefaultSession())
-                .setIdentity(new Identity("admin", Optional.empty(), ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("admin")))))
+                .setIdentity(new Identity(
+                        "admin",
+                        Optional.empty(),
+                        ImmutableMap.of("hive", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("admin"))),
+                        ImmutableMap.of(),
+                        ImmutableMap.of()))
                 .build();
     }
 

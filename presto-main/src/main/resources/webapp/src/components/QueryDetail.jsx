@@ -109,16 +109,16 @@ class TaskList extends React.Component {
         const showPortNumbers = TaskList.showPortNumbers(tasks);
 
         const renderedTasks = tasks.map(task => {
-            let elapsedTime = parseDuration(task.stats.elapsedTime);
+            let elapsedTime = parseDuration(task.stats.elapsedTimeInNanos + "ns");
             if (elapsedTime === 0) {
                 elapsedTime = Date.now() - Date.parse(task.stats.createTime);
             }
 
             return (
-                <Tr key={task.taskStatus.taskId}>
-                    <Td column="id" value={task.taskStatus.taskId}>
+                <Tr key={task.taskId}>
+                    <Td column="id" value={task.taskId}>
                         <a href={task.taskStatus.self + "?pretty"}>
-                            {getTaskIdSuffix(task.taskStatus.taskId)}
+                            {getTaskIdSuffix(task.taskId)}
                         </a>
                     </Td>
                     <Td column="host" value={getHostname(task.taskStatus.self)}>
@@ -135,11 +135,11 @@ class TaskList extends React.Component {
                     <Td column="rowsSec" value={computeRate(task.stats.rawInputPositions, elapsedTime)}>
                         {formatCount(computeRate(task.stats.rawInputPositions, elapsedTime))}
                     </Td>
-                    <Td column="bytes" value={parseDataSize(task.stats.rawInputDataSize)}>
-                        {formatDataSizeBytes(parseDataSize(task.stats.rawInputDataSize))}
+                    <Td column="bytes" value={task.stats.rawInputDataSizeInBytes}>
+                        {formatDataSizeBytes(task.stats.rawInputDataSizeInBytes)}
                     </Td>
-                    <Td column="bytesSec" value={computeRate(parseDataSize(task.stats.rawInputDataSize), elapsedTime)}>
-                        {formatDataSizeBytes(computeRate(parseDataSize(task.stats.rawInputDataSize), elapsedTime))}
+                    <Td column="bytesSec" value={computeRate(task.stats.rawInputDataSizeInBytes, elapsedTime)}>
+                        {formatDataSizeBytes(computeRate(task.stats.rawInputDataSizeInBytes, elapsedTime))}
                     </Td>
                     <Td column="splitsPending" value={task.stats.queuedDrivers}>
                         {task.stats.queuedDrivers}
@@ -153,11 +153,11 @@ class TaskList extends React.Component {
                     <Td column="splitsDone" value={task.stats.completedDrivers}>
                         {task.stats.completedDrivers}
                     </Td>
-                    <Td column="elapsedTime" value={parseDuration(task.stats.elapsedTime)}>
-                        {task.stats.elapsedTime}
+                    <Td column="elapsedTime" value={parseDuration(task.stats.elapsedTimeInNanos + "ns")}>
+                        {formatDuration(parseDuration(task.stats.elapsedTimeInNanos + "ns"))}
                     </Td>
-                    <Td column="cpuTime" value={parseDuration(task.stats.totalCpuTime)}>
-                        {task.stats.totalCpuTime}
+                    <Td column="cpuTime" value={parseDuration(task.stats.totalCpuTimeInNanos + "ns")}>
+                        {formatDuration(parseDuration(task.stats.totalCpuTimeInNanos + "ns"))}
                     </Td>
                     <Td column="bufferedBytes" value={task.outputBuffers.totalBufferedBytes}>
                         {formatDataSizeBytes(task.outputBuffers.totalBufferedBytes)}
@@ -189,24 +189,29 @@ class TaskList extends React.Component {
                 ]}
                    defaultSort={{column: 'id', direction: 'asc'}}>
                 <Thead>
-                <Th column="id">ID</Th>
-                <Th column="host">Host</Th>
-                <Th column="state">State</Th>
-                <Th column="splitsPending"><span className="glyphicon glyphicon-pause" style={GLYPHICON_HIGHLIGHT} data-toggle="tooltip" data-placement="top"
-                                                 title="Pending splits"/></Th>
-                <Th column="splitsRunning"><span className="glyphicon glyphicon-play" style={GLYPHICON_HIGHLIGHT} data-toggle="tooltip" data-placement="top"
-                                                 title="Running splits"/></Th>
-                <Th column="splitsBlocked"><span className="glyphicon glyphicon-bookmark" style={GLYPHICON_HIGHLIGHT} data-toggle="tooltip" data-placement="top"
-                                                 title="Blocked splits"/></Th>
-                <Th column="splitsDone"><span className="glyphicon glyphicon-ok" style={GLYPHICON_HIGHLIGHT} data-toggle="tooltip" data-placement="top"
-                                              title="Completed splits"/></Th>
-                <Th column="rows">Rows</Th>
-                <Th column="rowsSec">Rows/s</Th>
-                <Th column="bytes">Bytes</Th>
-                <Th column="bytesSec">Bytes/s</Th>
-                <Th column="elapsedTime">Elapsed</Th>
-                <Th column="cpuTime">CPU Time</Th>
-                <Th column="bufferedBytes">Buffered</Th>
+                    <Th column="id">ID</Th>
+                    <Th column="host">Host</Th>
+                    <Th column="state">State</Th>
+                    <Th column="splitsPending"><span className="glyphicon glyphicon-pause" style={GLYPHICON_HIGHLIGHT}
+                                                     data-toggle="tooltip" data-placement="top"
+                                                     title="Pending splits"/></Th>
+                    <Th column="splitsRunning"><span className="glyphicon glyphicon-play" style={GLYPHICON_HIGHLIGHT}
+                                                     data-toggle="tooltip" data-placement="top"
+                                                     title="Running splits"/></Th>
+                    <Th column="splitsBlocked"><span className="glyphicon glyphicon-bookmark"
+                                                     style={GLYPHICON_HIGHLIGHT} data-toggle="tooltip"
+                                                     data-placement="top"
+                                                     title="Blocked splits"/></Th>
+                    <Th column="splitsDone"><span className="glyphicon glyphicon-ok" style={GLYPHICON_HIGHLIGHT}
+                                                  data-toggle="tooltip" data-placement="top"
+                                                  title="Completed splits"/></Th>
+                    <Th column="rows">Rows</Th>
+                    <Th column="rowsSec">Rows/s</Th>
+                    <Th column="bytes">Bytes</Th>
+                    <Th column="bytesSec">Bytes/s</Th>
+                    <Th column="elapsedTime">Elapsed</Th>
+                    <Th column="cpuTime">CPU Time</Th>
+                    <Th column="bufferedBytes">Buffered</Th>
                 </Thead>
                 {renderedTasks}
             </Table>
@@ -248,7 +253,8 @@ class StageSummary extends React.Component {
         super(props);
         this.state = {
             expanded: false,
-            lastRender: null
+            lastRender: null,
+            taskFilter: TASK_FILTER.ALL
         };
     }
 
@@ -299,13 +305,13 @@ class StageSummary extends React.Component {
 
     componentDidUpdate() {
         const stage = this.props.stage;
-        const numTasks = stage.tasks.length;
+        const numTasks = stage.latestAttemptExecutionInfo.tasks.length;
 
         // sort the x-axis
-        stage.tasks.sort((taskA, taskB) => getTaskNumber(taskA.taskStatus.taskId) - getTaskNumber(taskB.taskStatus.taskId));
+        stage.latestAttemptExecutionInfo.tasks.sort((taskA, taskB) => getTaskNumber(taskA.taskId) - getTaskNumber(taskB.taskId));
 
-        const scheduledTimes = stage.tasks.map(task => parseDuration(task.stats.totalScheduledTime));
-        const cpuTimes = stage.tasks.map(task => parseDuration(task.stats.totalCpuTime));
+        const scheduledTimes = stage.latestAttemptExecutionInfo.tasks.map(task => parseDuration(task.stats.totalScheduledTimeInNanos + "ns"));
+        const cpuTimes = stage.latestAttemptExecutionInfo.tasks.map(task => parseDuration(task.stats.totalCpuTimeInNanos + "ns"));
 
         // prevent multiple calls to componentDidUpdate (resulting from calls to setState or otherwise) within the refresh interval from re-rendering sparklines/charts
         if (this.state.lastRender === null || (Date.now() - this.state.lastRender) >= 1000) {
@@ -334,6 +340,71 @@ class StageSummary extends React.Component {
         }
     }
 
+    renderStageExecutionAttemptsTasks(attempts) {
+        return attempts.map(attempt => {
+            return this.renderTaskList(attempt.tasks)
+        });
+    }
+
+    renderTaskList(tasks) {
+        tasks = this.state.expanded ? tasks : [];
+        tasks = tasks.filter(task => this.state.taskFilter.predicate(task.taskStatus.state), this);
+        return (
+            <tr style={this.getExpandedStyle()}>
+                <td colSpan="6">
+                    <TaskList tasks={tasks}/>
+                </td>
+            </tr>
+        );
+    }
+
+    renderTaskFilterListItem(taskFilter) {
+        return (
+            <li><a href="#" className={this.state.taskFilter === taskFilter ? "selected" : ""}
+                   onClick={this.handleTaskFilterClick.bind(this, taskFilter)}>{taskFilter.text}</a></li>
+        );
+    }
+
+    handleTaskFilterClick(filter, event) {
+        this.setState({
+            taskFilter: filter
+        });
+        event.preventDefault();
+    }
+
+    renderTaskFilter() {
+        return (<div className="row">
+            <div className="col-xs-6">
+                <h3>Tasks</h3>
+            </div>
+            <div className="col-xs-6">
+                <table className="header-inline-links">
+                    <tbody>
+                    <tr>
+                        <td>
+                            <div className="input-group-btn text-right">
+                                <button type="button" className="btn btn-default dropdown-toggle pull-right text-right"
+                                        data-toggle="dropdown" aria-haspopup="true"
+                                        aria-expanded="false">
+                                    Show: {this.state.taskFilter.text} <span className="caret"/>
+                                </button>
+                                <ul className="dropdown-menu">
+                                    {this.renderTaskFilterListItem(TASK_FILTER.ALL)}
+                                    {this.renderTaskFilterListItem(TASK_FILTER.PLANNED)}
+                                    {this.renderTaskFilterListItem(TASK_FILTER.RUNNING)}
+                                    {this.renderTaskFilterListItem(TASK_FILTER.FINISHED)}
+                                    {this.renderTaskFilterListItem(TASK_FILTER.FAILED)}
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>);
+
+    }
+
     render() {
         const stage = this.props.stage;
         if (stage === undefined || !stage.hasOwnProperty('plan')) {
@@ -343,7 +414,7 @@ class StageSummary extends React.Component {
                 </tr>);
         }
 
-        const totalBufferedBytes = stage.tasks
+        const totalBufferedBytes = stage.latestAttemptExecutionInfo.tasks
             .map(task => task.outputBuffers.totalBufferedBytes)
             .reduce((a, b) => a + b, 0);
 
@@ -374,7 +445,7 @@ class StageSummary extends React.Component {
                                             Scheduled
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.stageStats.totalScheduledTime}
+                                            {stage.latestAttemptExecutionInfo.stats.totalScheduledTime}
                                         </td>
                                     </tr>
                                     <tr>
@@ -382,7 +453,7 @@ class StageSummary extends React.Component {
                                             Blocked
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.stageStats.totalBlockedTime}
+                                            {stage.latestAttemptExecutionInfo.stats.totalBlockedTime}
                                         </td>
                                     </tr>
                                     <tr>
@@ -390,7 +461,7 @@ class StageSummary extends React.Component {
                                             CPU
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.stageStats.totalCpuTime}
+                                            {stage.latestAttemptExecutionInfo.stats.totalCpuTime}
                                         </td>
                                     </tr>
                                     </tbody>
@@ -412,7 +483,7 @@ class StageSummary extends React.Component {
                                             Cumulative
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {formatDataSizeBytes(stage.stageStats.cumulativeUserMemory / 1000)}
+                                            {formatDataSizeBytes(stage.latestAttemptExecutionInfo.stats.cumulativeUserMemory / 1000)}
                                         </td>
                                     </tr>
                                     <tr>
@@ -420,7 +491,7 @@ class StageSummary extends React.Component {
                                             Current
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.stageStats.userMemoryReservation}
+                                            {stage.latestAttemptExecutionInfo.stats.userMemoryReservation}
                                         </td>
                                     </tr>
                                     <tr>
@@ -436,7 +507,7 @@ class StageSummary extends React.Component {
                                             Peak
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.stageStats.peakUserMemoryReservation}
+                                            {stage.latestAttemptExecutionInfo.stats.peakUserMemoryReservation}
                                         </td>
                                     </tr>
                                     </tbody>
@@ -458,7 +529,7 @@ class StageSummary extends React.Component {
                                             Pending
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.tasks.filter(task => task.taskStatus.state === "PLANNED").length}
+                                            {stage.latestAttemptExecutionInfo.tasks.filter(task => task.taskStatus.state === "PLANNED").length}
                                         </td>
                                     </tr>
                                     <tr>
@@ -466,7 +537,7 @@ class StageSummary extends React.Component {
                                             Running
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.tasks.filter(task => task.taskStatus.state === "RUNNING").length}
+                                            {stage.latestAttemptExecutionInfo.tasks.filter(task => task.taskStatus.state === "RUNNING").length}
                                         </td>
                                     </tr>
                                     <tr>
@@ -474,7 +545,7 @@ class StageSummary extends React.Component {
                                             Blocked
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.tasks.filter(task => task.stats.fullyBlocked).length}
+                                            {stage.latestAttemptExecutionInfo.tasks.filter(task => task.stats.fullyBlocked).length}
                                         </td>
                                     </tr>
                                     <tr>
@@ -482,7 +553,7 @@ class StageSummary extends React.Component {
                                             Total
                                         </td>
                                         <td className="stage-table-stat-text">
-                                            {stage.tasks.length}
+                                            {stage.latestAttemptExecutionInfo.tasks.length}
                                         </td>
                                     </tr>
                                     </tbody>
@@ -562,6 +633,14 @@ class StageSummary extends React.Component {
                                 </table>
                             </td>
                         </tr>
+                        <tr style={this.getExpandedStyle()}>
+                            <td colSpan="6">
+                                {this.renderTaskFilter()}
+                            </td>
+                        </tr>
+                        {this.renderStageExecutionAttemptsTasks([stage.latestAttemptExecutionInfo])}
+
+                        {this.renderStageExecutionAttemptsTasks(stage.previousAttemptsExecutionInfos)}
                         </tbody>
                     </table>
                 </td>
@@ -618,11 +697,26 @@ const SMALL_SPARKLINE_PROPERTIES = {
 };
 
 const TASK_FILTER = {
-    ALL: function () { return true },
-    PLANNED: function (state) { return state === 'PLANNED' },
-    RUNNING: function (state) { return state === 'RUNNING' },
-    FINISHED: function (state) { return state === 'FINISHED' },
-    FAILED: function (state) { return state === 'FAILED' || state === 'ABORTED' || state === 'CANCELED' },
+    ALL: {
+        text: "All",
+        predicate: function () { return true }
+    },
+    PLANNED: {
+        text: "Planned",
+        predicate: function (state) { return state === 'PLANNED' }
+    },
+    RUNNING: {
+        text: "Running",
+        predicate: function (state) { return state === 'RUNNING' }
+    },
+    FINISHED: {
+        text: "Finished",
+        predicate: function (state) { return state === 'FINISHED' }
+    },
+    FAILED: {
+        text: "Aborted/Canceled/Failed",
+        predicate: function (state) { return state === 'FAILED' || state === 'ABORTED' || state === 'CANCELED' }
+    },
 };
 
 export class QueryDetail extends React.Component {
@@ -632,7 +726,6 @@ export class QueryDetail extends React.Component {
         this.state = {
             query: null,
             lastSnapshotStages: null,
-            lastSnapshotTasks: null,
 
             lastScheduledTime: 0,
             lastCpuTime: 0,
@@ -653,9 +746,6 @@ export class QueryDetail extends React.Component {
             lastRender: null,
 
             stageRefresh: true,
-            taskRefresh: true,
-
-            taskFilter: TASK_FILTER.ALL,
         };
 
         this.refreshLoop = this.refreshLoop.bind(this);
@@ -725,10 +815,6 @@ export class QueryDetail extends React.Component {
             if (this.state.stageRefresh) {
                 lastSnapshotStages = query.outputStage;
             }
-            let lastSnapshotTasks = this.state.lastSnapshotTasks;
-            if (this.state.taskRefresh) {
-                lastSnapshotTasks = query.outputStage;
-            }
 
             let lastRefresh = this.state.lastRefresh;
             const lastScheduledTime = this.state.lastScheduledTime;
@@ -741,7 +827,6 @@ export class QueryDetail extends React.Component {
             this.setState({
                 query: query,
                 lastSnapshotStage: lastSnapshotStages,
-                lastSnapshotTasks: lastSnapshotTasks,
 
                 lastScheduledTime: parseDuration(query.queryStats.totalScheduledTime),
                 lastCpuTime: parseDuration(query.queryStats.totalCpuTime),
@@ -788,29 +873,6 @@ export class QueryDetail extends React.Component {
             });
     }
 
-    handleTaskRefreshClick() {
-        if (this.state.taskRefresh) {
-            this.setState({
-                taskRefresh: false,
-                lastSnapshotTasks: this.state.query.outputStage,
-            });
-        }
-        else {
-            this.setState({
-                taskRefresh: true,
-            });
-        }
-    }
-
-    renderTaskRefreshButton() {
-        if (this.state.taskRefresh) {
-            return <button className="btn btn-info live-button" onClick={this.handleTaskRefreshClick.bind(this)}>Auto-Refresh: On</button>
-        }
-        else {
-            return <button className="btn btn-info live-button" onClick={this.handleTaskRefreshClick.bind(this)}>Auto-Refresh: Off</button>
-        }
-    }
-
     handleStageRefreshClick() {
         if (this.state.stageRefresh) {
             this.setState({
@@ -832,27 +894,6 @@ export class QueryDetail extends React.Component {
         else {
             return <button className="btn btn-info live-button" onClick={this.handleStageRefreshClick.bind(this)}>Auto-Refresh: Off</button>
         }
-    }
-
-    renderTaskFilterListItem(taskFilter, taskFilterText) {
-        return (
-            <li><a href="#" className={this.state.taskFilter === taskFilter ? "selected" : ""} onClick={this.handleTaskFilterClick.bind(this, taskFilter)}>{taskFilterText}</a></li>
-        );
-    }
-
-    handleTaskFilterClick(filter, event) {
-        this.setState({
-            taskFilter: filter
-        });
-        event.preventDefault();
-    }
-
-    getTasksFromStage(stage) {
-        if (stage === undefined || !stage.hasOwnProperty('subStages') || !stage.hasOwnProperty('tasks')) {
-            return []
-        }
-
-        return [].concat.apply(stage.tasks, stage.subStages.map(this.getTasksFromStage, this));
     }
 
     componentDidMount() {
@@ -885,53 +926,6 @@ export class QueryDetail extends React.Component {
 
         $('[data-toggle="tooltip"]').tooltip();
         new Clipboard('.copy-button');
-    }
-
-    renderTasks() {
-        if (this.state.lastSnapshotTasks === null) {
-            return;
-        }
-
-        const tasks = this.getTasksFromStage(this.state.lastSnapshotTasks).filter(task => this.state.taskFilter(task.taskStatus.state), this);
-
-        return (
-            <div>
-                <div className="row">
-                    <div className="col-xs-9">
-                        <h3>Tasks</h3>
-                    </div>
-                    <div className="col-xs-3">
-                        <table className="header-inline-links">
-                            <tbody>
-                            <tr>
-                                <td>
-                                    <div className="input-group-btn text-right">
-                                        <button type="button" className="btn btn-default dropdown-toggle pull-right text-right" data-toggle="dropdown" aria-haspopup="true"
-                                                aria-expanded="false">
-                                            Show <span className="caret"/>
-                                        </button>
-                                        <ul className="dropdown-menu">
-                                            {this.renderTaskFilterListItem(TASK_FILTER.ALL, "All")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.PLANNED, "Planned")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.RUNNING, "Running")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.FINISHED, "Finished")}
-                                            {this.renderTaskFilterListItem(TASK_FILTER.FAILED, "Aborted/Canceled/Failed")}
-                                        </ul>
-                                    </div>
-                                </td>
-                                <td>&nbsp;&nbsp;{this.renderTaskRefreshButton()}</td>
-                            </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-                <div className="row">
-                    <div className="col-xs-12">
-                        <TaskList key={this.state.query.queryId} tasks={tasks}/>
-                    </div>
-                </div>
-            </div>
-        );
     }
 
     renderStages() {
@@ -1244,6 +1238,14 @@ export class QueryDetail extends React.Component {
                             </tr>
                             <tr>
                                 <td className="info-title">
+                                    Planning Time
+                                </td>
+                                <td className="info-text">
+                                    {query.queryStats.totalPlanningTime}
+                                </td>
+                            </tr>
+                            <tr>
+                                <td className="info-title">
                                     Execution Time
                                 </td>
                                 <td className="info-text">
@@ -1507,7 +1509,6 @@ export class QueryDetail extends React.Component {
                     </div>
                 </div>
                 {this.renderStages()}
-                {this.renderTasks()}
             </div>
         );
     }

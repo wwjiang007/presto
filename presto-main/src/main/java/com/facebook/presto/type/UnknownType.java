@@ -13,15 +13,15 @@
  */
 package com.facebook.presto.type;
 
-import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.ByteArrayBlockBuilder;
-import com.facebook.presto.spi.block.PageBuilderStatus;
-import com.facebook.presto.spi.type.AbstractType;
-import com.facebook.presto.spi.type.FixedWidthType;
-import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.BlockBuilderStatus;
+import com.facebook.presto.common.block.ByteArrayBlockBuilder;
+import com.facebook.presto.common.block.PageBuilderStatus;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.AbstractType;
+import com.facebook.presto.common.type.FixedWidthType;
+import com.facebook.presto.common.type.TypeSignature;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -112,7 +112,7 @@ public final class UnknownType
     }
 
     @Override
-    public Object getObjectValue(ConnectorSession session, Block block, int position)
+    public Object getObjectValue(SqlFunctionProperties properties, Block block, int position)
     {
         // call is null in case position is out of bounds
         checkArgument(block.isNull(position), "Expected NULL value for UnknownType");

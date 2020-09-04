@@ -19,13 +19,13 @@ import com.facebook.presto.client.Column;
 import com.facebook.presto.client.QueryError;
 import com.facebook.presto.client.QueryStatusInfo;
 import com.facebook.presto.client.StatementClient;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.metadata.MetadataUtil;
 import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.QualifiedTablePrefix;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.session.ResourceEstimates;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -42,10 +42,10 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.client.StatementClientFactory.newStatementClient;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.session.ResourceEstimates.CPU_TIME;
 import static com.facebook.presto.spi.session.ResourceEstimates.EXECUTION_TIME;
 import static com.facebook.presto.spi.session.ResourceEstimates.PEAK_MEMORY;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.transaction.TransactionBuilder.transaction;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Iterables.transform;
@@ -147,13 +147,13 @@ public abstract class AbstractTestingPrestoClient<T>
                 session.getClientInfo().orElse(null),
                 session.getCatalog().orElse(null),
                 session.getSchema().orElse(null),
-                session.getPath().toString(),
                 session.getTimeZoneKey().getId(),
                 session.getLocale(),
                 resourceEstimates.build(),
                 properties.build(),
                 session.getPreparedStatements(),
                 session.getIdentity().getRoles(),
+                session.getIdentity().getExtraCredentials(),
                 session.getTransactionId().map(Object::toString).orElse(null),
                 clientRequestTimeout);
     }

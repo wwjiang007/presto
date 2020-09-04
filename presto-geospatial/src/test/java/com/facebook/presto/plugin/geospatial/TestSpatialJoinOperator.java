@@ -14,6 +14,7 @@
 package com.facebook.presto.plugin.geospatial;
 
 import com.facebook.presto.RowPagesBuilder;
+import com.facebook.presto.common.Page;
 import com.facebook.presto.geospatial.KdbTree;
 import com.facebook.presto.geospatial.KdbTreeUtils;
 import com.facebook.presto.geospatial.Rectangle;
@@ -31,10 +32,9 @@ import com.facebook.presto.operator.SpatialJoinOperator.SpatialJoinOperatorFacto
 import com.facebook.presto.operator.StandardJoinFilterFunction;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.ValuesOperator;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.gen.JoinFilterFunctionCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.SpatialJoinNode.Type;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.TestingTaskContext;
@@ -55,21 +55,21 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.geospatial.KdbTree.Node.newInternal;
 import static com.facebook.presto.geospatial.KdbTree.Node.newLeaf;
-import static com.facebook.presto.operator.OperatorAssertion.assertOperatorEquals;
+import static com.facebook.presto.operator.OperatorAssertion.assertOperatorEqualsIgnoreOrder;
 import static com.facebook.presto.plugin.geospatial.GeoFunctions.stGeometryFromText;
 import static com.facebook.presto.plugin.geospatial.GeoFunctions.stPoint;
 import static com.facebook.presto.plugin.geospatial.GeometryType.GEOMETRY;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.plan.SpatialJoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.SpatialJoinNode.Type.LEFT;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.testng.Assert.assertEquals;
@@ -191,7 +191,7 @@ public class TestSpatialJoinOperator
         DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
         PagesSpatialIndexFactory pagesSpatialIndexFactory = buildIndex(driverContext, (build, probe, r) -> build.contains(probe), Optional.empty(), Optional.empty(), buildPages);
         OperatorFactory joinOperatorFactory = new SpatialJoinOperatorFactory(2, new PlanNodeId("test"), joinType, probePages.getTypes(), Ints.asList(1), 0, Optional.empty(), pagesSpatialIndexFactory);
-        assertOperatorEquals(joinOperatorFactory, driverContext, probePages.build(), expected);
+        assertOperatorEqualsIgnoreOrder(joinOperatorFactory, driverContext, probePages.build(), expected);
     }
 
     @Test
@@ -358,7 +358,7 @@ public class TestSpatialJoinOperator
                 .row("10_1", "10_0")
                 .build();
 
-        assertOperatorEquals(joinOperatorFactory, driverContext, probePages.build(), expected);
+        assertOperatorEqualsIgnoreOrder(joinOperatorFactory, driverContext, probePages.build(), expected);
     }
 
     @Test
@@ -391,7 +391,7 @@ public class TestSpatialJoinOperator
 
         PagesSpatialIndexFactory pagesSpatialIndexFactory = buildIndex(driverContext, (build, probe, r) -> build.contains(probe), Optional.empty(), Optional.of(2), Optional.of(KDB_TREE_JSON), Optional.empty(), buildPages);
         OperatorFactory joinOperatorFactory = new SpatialJoinOperatorFactory(2, new PlanNodeId("test"), INNER, probePages.getTypes(), Ints.asList(1), 0, Optional.of(2), pagesSpatialIndexFactory);
-        assertOperatorEquals(joinOperatorFactory, driverContext, probePages.build(), expected);
+        assertOperatorEqualsIgnoreOrder(joinOperatorFactory, driverContext, probePages.build(), expected);
     }
 
     @Test
@@ -417,7 +417,7 @@ public class TestSpatialJoinOperator
 
         PagesSpatialIndexFactory pagesSpatialIndexFactory = buildIndex(driverContext, (build, probe, r) -> build.intersects(probe), Optional.empty(), Optional.of(2), Optional.of(KDB_TREE_JSON), Optional.empty(), pages);
         OperatorFactory joinOperatorFactory = new SpatialJoinOperatorFactory(2, new PlanNodeId("test"), INNER, pages.getTypes(), Ints.asList(1), 0, Optional.of(2), pagesSpatialIndexFactory);
-        assertOperatorEquals(joinOperatorFactory, driverContext, pages.build(), expected);
+        assertOperatorEqualsIgnoreOrder(joinOperatorFactory, driverContext, pages.build(), expected);
     }
 
     private PagesSpatialIndexFactory buildIndex(DriverContext driverContext, SpatialPredicate spatialRelationshipTest, Optional<Integer> radiusChannel, Optional<InternalJoinFilterFunction> filterFunction, RowPagesBuilder buildPages)

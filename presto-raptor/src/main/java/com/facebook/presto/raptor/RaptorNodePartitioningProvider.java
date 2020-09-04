@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.raptor;
 
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.BucketFunction;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
@@ -22,7 +23,6 @@ import com.facebook.presto.spi.connector.ConnectorBucketNodeMap;
 import com.facebook.presto.spi.connector.ConnectorNodePartitioningProvider;
 import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 
 import javax.inject.Inject;
@@ -33,6 +33,7 @@ import java.util.function.ToIntFunction;
 
 import static com.facebook.presto.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static com.facebook.presto.spi.connector.ConnectorBucketNodeMap.createBucketNodeMap;
+import static com.facebook.presto.spi.schedule.NodeSelectionStrategy.HARD_AFFINITY;
 import static com.google.common.collect.Maps.uniqueIndex;
 import static java.util.Objects.requireNonNull;
 
@@ -48,7 +49,7 @@ public class RaptorNodePartitioningProvider
     }
 
     @Override
-    public ConnectorBucketNodeMap getBucketNodeMap(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorPartitioningHandle partitioning)
+    public ConnectorBucketNodeMap getBucketNodeMap(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorPartitioningHandle partitioning, List<Node> sortedNodes)
     {
         RaptorPartitioningHandle handle = (RaptorPartitioningHandle) partitioning;
 
@@ -62,7 +63,7 @@ public class RaptorNodePartitioningProvider
             }
             bucketToNode.add(node);
         }
-        return createBucketNodeMap(bucketToNode.build());
+        return createBucketNodeMap(bucketToNode.build(), HARD_AFFINITY);
     }
 
     @Override
@@ -75,5 +76,12 @@ public class RaptorNodePartitioningProvider
     public BucketFunction getBucketFunction(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorPartitioningHandle partitioning, List<Type> partitionChannelTypes, int bucketCount)
     {
         return new RaptorBucketFunction(bucketCount, partitionChannelTypes);
+    }
+
+    @Override
+    public int getBucketCount(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorPartitioningHandle partitioningHandle)
+    {
+        RaptorPartitioningHandle handle = (RaptorPartitioningHandle) partitioningHandle;
+        return handle.getBucketToNode().size();
     }
 }

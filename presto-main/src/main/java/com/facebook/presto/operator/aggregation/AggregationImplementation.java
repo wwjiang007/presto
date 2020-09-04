@@ -13,13 +13,16 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.function.QualifiedFunctionName;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.common.type.TypeSignature;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.operator.ParametricImplementation;
 import com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType;
 import com.facebook.presto.operator.annotations.FunctionsParserHelper;
 import com.facebook.presto.operator.annotations.ImplementationDependency;
-import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.function.AggregationState;
 import com.facebook.presto.spi.function.BlockIndex;
 import com.facebook.presto.spi.function.BlockPosition;
@@ -30,8 +33,6 @@ import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.function.TypeParameter;
 import com.facebook.presto.spi.function.TypeVariableConstraint;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.collect.ImmutableList;
 
 import java.lang.annotation.Annotation;
@@ -44,6 +45,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.BLOCK_INDEX;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.STATE;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.inputChannelParameterType;
@@ -54,7 +57,6 @@ import static com.facebook.presto.operator.annotations.ImplementationDependency.
 import static com.facebook.presto.operator.annotations.ImplementationDependency.getImplementationDependencyAnnotation;
 import static com.facebook.presto.operator.annotations.ImplementationDependency.isImplementationDependencyAnnotation;
 import static com.facebook.presto.operator.annotations.ImplementationDependency.validateImplementationDependencyAnnotation;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -304,7 +306,7 @@ public class AggregationImplementation
         private AggregationImplementation get()
         {
             Signature signature = new Signature(
-                    header.getName(),
+                    QualifiedFunctionName.of(DEFAULT_NAMESPACE, header.getName()),
                     FunctionKind.AGGREGATE,
                     typeVariableConstraints,
                     longVariableConstraints,
@@ -409,7 +411,7 @@ public class AggregationImplementation
                 Annotation[] annotations = inputFunction.getParameterAnnotations()[i];
 
                 // Skip injected parameters
-                if (parameterType == ConnectorSession.class) {
+                if (parameterType == SqlFunctionProperties.class) {
                     continue;
                 }
 
@@ -431,7 +433,7 @@ public class AggregationImplementation
                 Class<?> parameterType = parameter.getType();
 
                 // Skip injected parameters
-                if (parameterType == ConnectorSession.class) {
+                if (parameterType == SqlFunctionProperties.class) {
                     continue;
                 }
 

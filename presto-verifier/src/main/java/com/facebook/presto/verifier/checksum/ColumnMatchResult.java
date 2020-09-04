@@ -13,20 +13,34 @@
  */
 package com.facebook.presto.verifier.checksum;
 
+import com.facebook.presto.verifier.framework.Column;
+
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
 
-public class ColumnMatchResult
+public class ColumnMatchResult<T extends ColumnChecksum>
 {
     private final boolean matched;
-    private final String message;
+    private final Column column;
+    private final Optional<String> message;
+    private final T controlColumnChecksum;
+    private final T testColumnChecksum;
 
-    public ColumnMatchResult(boolean matched, String message)
+    public ColumnMatchResult(boolean matched, Column column, T controlColumnChecksum, T testColumnChecksum)
+    {
+        this(matched, column, Optional.empty(), controlColumnChecksum, testColumnChecksum);
+    }
+
+    public ColumnMatchResult(boolean matched, Column column, Optional<String> message, T controlColumnChecksum, T testColumnChecksum)
     {
         this.matched = matched;
+        this.column = requireNonNull(column, "column is null");
         this.message = requireNonNull(message, "message is null");
+        this.controlColumnChecksum = requireNonNull(controlColumnChecksum, "controlColumnChecksum is null");
+        this.testColumnChecksum = requireNonNull(testColumnChecksum, "testColumnChecksum is null");
     }
 
     public boolean isMatched()
@@ -34,9 +48,24 @@ public class ColumnMatchResult
         return matched;
     }
 
-    public String getMessage()
+    public Column getColumn()
+    {
+        return column;
+    }
+
+    public Optional<String> getMessage()
     {
         return message;
+    }
+
+    public T getControlChecksum()
+    {
+        return controlColumnChecksum;
+    }
+
+    public T getTestChecksum()
+    {
+        return testColumnChecksum;
     }
 
     @Override
@@ -48,15 +77,17 @@ public class ColumnMatchResult
         if ((obj == null) || (getClass() != obj.getClass())) {
             return false;
         }
-        ColumnMatchResult o = (ColumnMatchResult) obj;
+        ColumnMatchResult<?> o = (ColumnMatchResult<?>) obj;
         return Objects.equals(matched, o.matched) &&
-                Objects.equals(message, o.message);
+                Objects.equals(column, o.column) &&
+                Objects.equals(controlColumnChecksum, o.controlColumnChecksum) &&
+                Objects.equals(testColumnChecksum, o.testColumnChecksum);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(matched, message);
+        return Objects.hash(column, controlColumnChecksum, testColumnChecksum);
     }
 
     @Override
@@ -64,7 +95,9 @@ public class ColumnMatchResult
     {
         return toStringHelper(this)
                 .add("matched", matched)
-                .add("message", message)
+                .add("column", column)
+                .add("controlColumnChecksum", controlColumnChecksum)
+                .add("testColumnChecksum", testColumnChecksum)
                 .toString();
     }
 }

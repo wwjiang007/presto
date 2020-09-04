@@ -13,52 +13,37 @@
  */
 package com.facebook.presto.verifier.framework;
 
+import com.facebook.presto.verifier.event.VerifierQueryEvent;
+
+import java.util.Optional;
+
 import static java.util.Objects.requireNonNull;
 
 public class VerificationResult
 {
-    private final String controlChecksumQueryId;
-    private final String testChecksumQueryId;
-    private final String controlChecksumQuery;
-    private final String testChecksumQuery;
-    private final MatchResult matchResult;
+    private final Verification verification;
+    private final boolean shouldResubmit;
+    private final Optional<VerifierQueryEvent> event;
 
-    public VerificationResult(
-            String controlChecksumQueryId,
-            String testChecksumQueryId,
-            String controlChecksumQuery,
-            String testChecksumQuery,
-            MatchResult matchResult)
+    public VerificationResult(Verification verification, boolean shouldResubmit, Optional<VerifierQueryEvent> event)
     {
-        this.controlChecksumQueryId = requireNonNull(controlChecksumQueryId, "controlChecksumQueryId is null");
-        this.testChecksumQueryId = requireNonNull(testChecksumQueryId, "testChecksumQueryId is null");
-        this.controlChecksumQuery = requireNonNull(controlChecksumQuery, "controlChecksumQuery is null");
-        this.testChecksumQuery = requireNonNull(testChecksumQuery, "testChecksumQuery is null");
-        this.matchResult = requireNonNull(matchResult, "matchResult is null");
+        this.verification = requireNonNull(verification, "verification is null");
+        this.shouldResubmit = requireNonNull(shouldResubmit, "shouldResubmit is null");
+        this.event = requireNonNull(event, "event is null");
     }
 
-    public String getControlChecksumQueryId()
+    public Verification getVerification()
     {
-        return controlChecksumQueryId;
+        return verification;
     }
 
-    public String getControlChecksumQuery()
+    public boolean shouldResubmit()
     {
-        return controlChecksumQuery;
+        return shouldResubmit;
     }
 
-    public String getTestChecksumQueryId()
+    public Optional<VerifierQueryEvent> getEvent()
     {
-        return testChecksumQueryId;
-    }
-
-    public String getTestChecksumQuery()
-    {
-        return testChecksumQuery;
-    }
-
-    public MatchResult getMatchResult()
-    {
-        return matchResult;
+        return event;
     }
 }

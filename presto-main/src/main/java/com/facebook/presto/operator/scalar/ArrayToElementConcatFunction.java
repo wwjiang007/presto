@@ -13,30 +13,33 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.function.QualifiedFunctionName;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlScalarFunction;
-import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.Signature;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.function.SqlFunctionVisibility;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.function.Signature.typeVariable;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.spi.function.SqlFunctionVisibility.PUBLIC;
 import static com.facebook.presto.util.Reflection.methodHandle;
 
 public class ArrayToElementConcatFunction
         extends SqlScalarFunction
 {
     public static final ArrayToElementConcatFunction ARRAY_TO_ELEMENT_CONCAT_FUNCTION = new ArrayToElementConcatFunction();
-    private static final String FUNCTION_NAME = "concat";
 
     private static final MethodHandle METHOD_HANDLE_BOOLEAN = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Block.class, boolean.class);
     private static final MethodHandle METHOD_HANDLE_LONG = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Block.class, long.class);
@@ -46,7 +49,8 @@ public class ArrayToElementConcatFunction
 
     public ArrayToElementConcatFunction()
     {
-        super(new Signature(FUNCTION_NAME,
+        super(new Signature(
+                QualifiedFunctionName.of(DEFAULT_NAMESPACE, "concat"),
                 FunctionKind.SCALAR,
                 ImmutableList.of(typeVariable("E")),
                 ImmutableList.of(),
@@ -56,9 +60,9 @@ public class ArrayToElementConcatFunction
     }
 
     @Override
-    public boolean isHidden()
+    public SqlFunctionVisibility getVisibility()
     {
-        return false;
+        return PUBLIC;
     }
 
     @Override
@@ -74,7 +78,7 @@ public class ArrayToElementConcatFunction
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
+    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Type type = boundVariables.getTypeVariable("E");
         MethodHandle methodHandle;
@@ -95,7 +99,7 @@ public class ArrayToElementConcatFunction
         }
         methodHandle = methodHandle.bindTo(type);
 
-        return new ScalarFunctionImplementation(
+        return new BuiltInScalarFunctionImplementation(
                 false,
                 ImmutableList.of(
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL),

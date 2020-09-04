@@ -13,19 +13,24 @@
  */
 package com.facebook.presto.sql.planner;
 
-import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.common.block.SortOrder;
+import com.facebook.presto.spi.plan.Ordering;
+import com.facebook.presto.spi.plan.OrderingScheme;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.OrderBy;
 import com.facebook.presto.sql.tree.SortItem;
 import com.facebook.presto.sql.tree.SymbolReference;
+import com.google.common.collect.ImmutableList;
 
-import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
+import java.util.Set;
 
+import static com.facebook.presto.sql.relational.Expressions.variable;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.Streams.forEachPair;
 
 public class PlannerUtils
 {
@@ -45,28 +50,40 @@ public class PlannerUtils
         return SortOrder.DESC_NULLS_LAST;
     }
 
-    public static OrderingScheme toOrderingScheme(List<SortItem> sortItems)
+    public static OrderingScheme toOrderingScheme(OrderBy orderBy, TypeProvider types)
     {
-        return toOrderingScheme(sortItems, item -> {
-            checkArgument(item instanceof SymbolReference, "must be symbol reference");
-            return new Symbol(((SymbolReference) item).getName());
+        return toOrderingScheme(
+                orderBy.getSortItems().stream()
+                        .map(SortItem::getSortKey)
+                        .map(item -> {
+                            checkArgument(item instanceof SymbolReference, "must be symbol reference");
+                            return variable(((SymbolReference) item).getName(), types.get(item));
+                        }).collect(toImmutableList()),
+                orderBy.getSortItems().stream()
+                        .map(PlannerUtils::toSortOrder)
+                        .collect(toImmutableList()));
+    }
+
+    public static OrderingScheme toOrderingScheme(List<VariableReferenceExpression> orderingSymbols, List<SortOrder> sortOrders)
+    {
+        ImmutableList.Builder<Ordering> builder = ImmutableList.builder();
+
+        // don't override existing keys, i.e. when "ORDER BY a ASC, a DESC" is specified
+        Set<VariableReferenceExpression> keysSeen = new HashSet<>();
+
+        forEachPair(orderingSymbols.stream(), sortOrders.stream(), (variable, sortOrder) -> {
+            if (!keysSeen.contains(variable)) {
+                keysSeen.add(variable);
+                builder.add(new Ordering(variable, sortOrder));
+            }
         });
+
+        return new OrderingScheme(builder.build());
     }
 
-    public static OrderingScheme toOrderingScheme(List<SortItem> sortItems, Function<Expression, Symbol> translator)
+    public static VariableReferenceExpression toVariableReference(Expression expression, TypeProvider types)
     {
-        // The logic is similar to QueryPlanner::sort
-        Map<Symbol, SortOrder> orderings = new LinkedHashMap<>();
-        for (SortItem item : sortItems) {
-            Symbol symbol = translator.apply(item.getSortKey());
-            // don't override existing keys, i.e. when "ORDER BY a ASC, a DESC" is specified
-            orderings.putIfAbsent(symbol, toSortOrder(item));
-        }
-        return new OrderingScheme(orderings.keySet().stream().collect(toImmutableList()), orderings);
-    }
-
-    public static OrderingScheme toOrderingScheme(OrderBy orderBy)
-    {
-        return toOrderingScheme(orderBy.getSortItems());
+        checkArgument(expression instanceof SymbolReference);
+        return variable(((SymbolReference) expression).getName(), types.get(expression));
     }
 }

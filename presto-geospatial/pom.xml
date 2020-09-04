@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.221-SNAPSHOT</version>
+        <version>0.241-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-geospatial</artifactId>
@@ -48,10 +48,16 @@
 
         <dependency>
             <groupId>com.facebook.presto</groupId>
-            <artifactId>presto-spi</artifactId>
+            <artifactId>presto-common</artifactId>
             <scope>provided</scope>
         </dependency>
 
+        <dependency>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-spi</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
@@ -96,6 +102,12 @@
 
         <dependency>
             <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-hive-metastore</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.facebook.presto</groupId>
             <artifactId>presto-tpch</artifactId>
             <scope>test</scope>
         </dependency>
@@ -119,19 +131,19 @@
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>concurrent</artifactId>
             <scope>test</scope>
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>log-manager</artifactId>
             <scope>test</scope>
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>log</artifactId>
             <scope>test</scope>
         </dependency>
@@ -146,6 +158,11 @@
             <groupId>org.testng</groupId>
             <artifactId>testng</artifactId>
             <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
         </dependency>
 
         <dependency>

@@ -13,15 +13,15 @@
  */
 package com.facebook.presto.operator;
 
-import com.facebook.presto.connector.ConnectorId;
-import com.facebook.presto.execution.buffer.PagesSerde;
+import com.facebook.presto.common.Page;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
-import com.facebook.presto.execution.buffer.SerializedPage;
 import com.facebook.presto.metadata.Split;
-import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.UpdatablePageSource;
+import com.facebook.presto.spi.page.PagesSerde;
+import com.facebook.presto.spi.page.SerializedPage;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.split.RemoteSplit;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.Closeable;
@@ -120,7 +120,7 @@ public class ExchangeOperator
         checkArgument(split.getConnectorId().equals(REMOTE_CONNECTOR_ID), "split is not a remote split");
 
         RemoteSplit remoteSplit = (RemoteSplit) split.getConnectorSplit();
-        exchangeClient.addLocation(remoteSplit.getLocation(), remoteSplit.getRemoteSourceTaskId());
+        exchangeClient.addLocation(remoteSplit.getLocation().toURI(), remoteSplit.getRemoteSourceTaskId());
 
         return Optional::empty;
     }
@@ -179,7 +179,7 @@ public class ExchangeOperator
             return null;
         }
 
-        operatorContext.recordRawInput(page.getSizeInBytes());
+        operatorContext.recordRawInput(page.getSizeInBytes(), page.getPositionCount());
 
         Page deserializedPage = serde.deserialize(page);
         operatorContext.recordProcessedInput(deserializedPage.getSizeInBytes(), page.getPositionCount());

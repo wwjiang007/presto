@@ -13,7 +13,8 @@
  */
 package com.facebook.presto.raptor.integration;
 
-import com.facebook.presto.spi.type.ArrayType;
+import com.facebook.presto.Session;
+import com.facebook.presto.common.type.ArrayType;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.tests.AbstractTestIntegrationSmokeTest;
@@ -33,19 +34,20 @@ import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.stream.IntStream;
 
+import static com.facebook.airlift.testing.Assertions.assertGreaterThan;
+import static com.facebook.airlift.testing.Assertions.assertGreaterThanOrEqual;
+import static com.facebook.airlift.testing.Assertions.assertInstanceOf;
+import static com.facebook.airlift.testing.Assertions.assertLessThan;
+import static com.facebook.presto.SystemSessionProperties.COLOCATED_JOIN;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.raptor.RaptorColumnHandle.SHARD_UUID_COLUMN_TYPE;
 import static com.facebook.presto.raptor.RaptorQueryRunner.createRaptorQueryRunner;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static io.airlift.testing.Assertions.assertGreaterThan;
-import static io.airlift.testing.Assertions.assertGreaterThanOrEqual;
-import static io.airlift.testing.Assertions.assertInstanceOf;
-import static io.airlift.testing.Assertions.assertLessThan;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.function.Function.identity;
@@ -60,7 +62,12 @@ public class TestRaptorIntegrationSmokeTest
     @SuppressWarnings("unused")
     public TestRaptorIntegrationSmokeTest()
     {
-        this(() -> createRaptorQueryRunner(ImmutableMap.of(), true, false, ImmutableMap.of("storage.orc.optimized-writer-stage", "DISABLED")));
+        this(() -> createRaptorQueryRunner(
+                ImmutableMap.of(),
+                true,
+                false,
+                false,
+                ImmutableMap.of("storage.orc.optimized-writer-stage", "ENABLED_AND_VALIDATED")));
     }
 
     protected TestRaptorIntegrationSmokeTest(QueryRunnerSupplier supplier)
@@ -74,6 +81,13 @@ public class TestRaptorIntegrationSmokeTest
         assertUpdate("CREATE TABLE array_test AS SELECT ARRAY [1, 2, 3] AS c", 1);
         assertQuery("SELECT cardinality(c) FROM array_test", "SELECT 3");
         assertUpdate("DROP TABLE array_test");
+    }
+
+    @Test
+    public void testCreateTableUnsupportedType()
+    {
+        assertQueryFails("CREATE TABLE rowtype_test AS SELECT row(1) AS c", "Type not supported: row\\(integer\\)");
+        assertQueryFails("CREATE TABLE rowtype_test(row_type_field row(s varchar))", "Type not supported: row\\(s varchar\\)");
     }
 
     @Test
@@ -197,19 +211,10 @@ public class TestRaptorIntegrationSmokeTest
     @Test
     public void testShardingByTemporalDateColumnBucketed()
     {
-        // Make sure we have at least 2 different orderdate.
-        assertEquals(computeActual("SELECT count(DISTINCT orderdate) >= 2 FROM orders WHERE orderdate < date '1992-02-08'").getOnlyValue(), true);
+        String tableName = "test_shard_temporal_date_bucketed";
+        prepareTemporalShardedAndBucketedTable(tableName);
 
-        assertUpdate("CREATE TABLE test_shard_temporal_date_bucketed " +
-                        "WITH (temporal_column = 'orderdate', bucket_count = 10, bucketed_on = ARRAY ['orderkey']) AS " +
-                        "SELECT orderdate, orderkey " +
-                        "FROM orders " +
-                        "WHERE orderdate < date '1992-02-08'",
-                "SELECT count(*) " +
-                        "FROM orders " +
-                        "WHERE orderdate < date '1992-02-08'");
-
-        MaterializedResult results = computeActual("SELECT orderdate, \"$shard_uuid\" FROM test_shard_temporal_date_bucketed");
+        MaterializedResult results = computeActual("SELECT orderdate, \"$shard_uuid\" FROM " + tableName);
 
         // Each shard will only contain data of one date.
         SetMultimap<String, LocalDate> shardDateMap = HashMultimap.create();
@@ -222,8 +227,81 @@ public class TestRaptorIntegrationSmokeTest
         }
 
         // Make sure we have all the rows
-        assertQuery("SELECT orderdate, orderkey FROM test_shard_temporal_date_bucketed",
+        assertQuery("SELECT orderdate, orderkey FROM " + tableName,
                 "SELECT orderdate, orderkey FROM orders WHERE orderdate < date '1992-02-08'");
+    }
+
+    @Test
+    public void testColocatedJoin()
+    {
+        String tableName = "test_colocated_join";
+        prepareTemporalShardedAndBucketedTable(tableName);
+
+        Session colocated = Session.builder(getSession())
+                .setSystemProperty(COLOCATED_JOIN, "true")
+                .build();
+
+        assertQuery(
+                colocated,
+                format("SELECT t1.orderkey " +
+                                "FROM %s t1 JOIN %s t2 " +
+                                "ON t1.orderkey = t2.orderkey",
+                tableName,
+                tableName),
+                "SELECT t1.orderkey FROM " +
+                        "(SELECT * FROM orders WHERE orderdate < date '1992-02-08') t1 " +
+                        "JOIN " +
+                        "(SELECT * FROM orders WHERE orderdate < date '1992-02-08') t2 " +
+                        "   ON t1.orderkey = t2.orderkey");
+
+        // empty probe side
+        assertQuery(
+                colocated,
+                format("SELECT t1.orderkey " +
+                                "FROM " +
+                                "(SELECT * FROM %s WHERE orderdate < date '1970-01-01') t1 " +
+                                "JOIN %s t2 " +
+                                "   ON t1.orderkey = t2.orderkey",
+                        tableName,
+                        tableName),
+                "SELECT t1.orderkey FROM " +
+                        "(SELECT * FROM orders WHERE orderdate < date '1970-01-01') t1 " +
+                        "JOIN " +
+                        "(SELECT * FROM orders WHERE orderdate < date '1992-02-08') t2 " +
+                        "   ON t1.orderkey = t2.orderkey");
+
+        // empty build side
+        assertQuery(
+                colocated,
+                format("SELECT t1.orderkey " +
+                                "FROM " +
+                                "%s t1 JOIN " +
+                                "(SELECT * FROM %s WHERE orderdate < date '1970-01-01') t2 " +
+                                "   ON t1.orderkey = t2.orderkey",
+                        tableName,
+                        tableName),
+                "SELECT t1.orderkey FROM " +
+                        "(SELECT * FROM orders WHERE orderdate < date '1992-02-08') t1 " +
+                        "JOIN " +
+                        "(SELECT * FROM orders WHERE orderdate < date '1970-01-01') t2 " +
+                        "   ON t1.orderkey = t2.orderkey");
+    }
+
+    private void prepareTemporalShardedAndBucketedTable(String tableName)
+    {
+        // Make sure we have at least 2 different orderdate.
+        assertEquals(computeActual("SELECT count(DISTINCT orderdate) >= 2 FROM orders WHERE orderdate < date '1992-02-08'").getOnlyValue(), true);
+
+        assertUpdate(
+                format("CREATE TABLE %s " +
+                                "WITH (temporal_column = 'orderdate', bucket_count = 10, bucketed_on = ARRAY ['orderkey']) AS " +
+                                "SELECT orderdate, orderkey " +
+                                "FROM orders " +
+                                "WHERE orderdate < date '1992-02-08'",
+                        tableName),
+                "SELECT count(*) " +
+                        "FROM orders " +
+                        "WHERE orderdate < date '1992-02-08'");
     }
 
     @Test
@@ -296,6 +374,8 @@ public class TestRaptorIntegrationSmokeTest
     {
         computeActual("CREATE TABLE test_table_properties_1 (foo BIGINT, bar BIGINT, ds DATE) WITH (ordering=array['foo','bar'], temporal_column='ds')");
         computeActual("CREATE TABLE test_table_properties_2 (foo BIGINT, bar BIGINT, ds DATE) WITH (ORDERING=array['foo','bar'], TEMPORAL_COLUMN='ds')");
+        computeActual("CREATE TABLE test_table_properties_3 (foo BIGINT, bar BIGINT, ds DATE) WITH (TABLE_SUPPORTS_DELTA_DELETE=false)");
+        computeActual("CREATE TABLE test_table_properties_4 (foo BIGINT, bar BIGINT, ds DATE) WITH (table_supports_delta_delete=true)");
     }
 
     @Test
@@ -511,6 +591,7 @@ public class TestRaptorIntegrationSmokeTest
                         "   bucket_count = 32,\n" +
                         "   bucketed_on = ARRAY['c1','c6'],\n" +
                         "   ordering = ARRAY['c6','c1'],\n" +
+                        "   table_supports_delta_delete = true,\n" +
                         "   temporal_column = 'c7'\n" +
                         ")",
                 getSession().getCatalog().get(), getSession().getSchema().get(), "test_show_create_table");
@@ -540,7 +621,8 @@ public class TestRaptorIntegrationSmokeTest
                         "   bucket_count = 32,\n" +
                         "   bucketed_on = ARRAY['c1','c6'],\n" +
                         "   ordering = ARRAY['c6','c1'],\n" +
-                        "   organized = true\n" +
+                        "   organized = true,\n" +
+                        "   table_supports_delta_delete = true\n" +
                         ")",
                 getSession().getCatalog().get(), getSession().getSchema().get(), "test_show_create_table_organized");
         assertUpdate(createTableSql);
@@ -562,10 +644,10 @@ public class TestRaptorIntegrationSmokeTest
                         "   \"c'4\" array(bigint),\n" +
                         "   c5 map(bigint, varchar)\n" +
                         ")",
-                getSession().getCatalog().get(), getSession().getSchema().get(), "\"test_show_create_table\"\"2\"");
+                getSession().getCatalog().get(), getSession().getSchema().get(), "test_show_create_table_default");
         assertUpdate(createTableSql);
 
-        actualResult = computeActual("SHOW CREATE TABLE \"test_show_create_table\"\"2\"");
+        actualResult = computeActual("SHOW CREATE TABLE \"test_show_create_table_default\"");
         assertEquals(getOnlyElement(actualResult.getOnlyColumnAsSet()), createTableSql);
     }
 
@@ -589,6 +671,9 @@ public class TestRaptorIntegrationSmokeTest
         assertUpdate("" +
                 "CREATE TABLE system_tables_test5 (c50 timestamp, c51 varchar, c52 double, c53 bigint, c54 bigint) " +
                 "WITH (ordering = ARRAY['c51', 'c52'], distribution_name = 'test_distribution', bucket_count = 50, bucketed_on = ARRAY ['c53', 'c54'], organized = true)");
+        assertUpdate("" +
+                "CREATE TABLE system_tables_test6 (c60 timestamp, c61 varchar, c62 double, c63 bigint, c64 bigint) " +
+                "WITH (ordering = ARRAY['c61', 'c62'], distribution_name = 'test_distribution', bucket_count = 50, bucketed_on = ARRAY ['c63', 'c64'], organized = true, table_supports_delta_delete = true)");
 
         MaterializedResult actualResults = computeActual("SELECT * FROM system.tables");
         assertEquals(
@@ -602,35 +687,39 @@ public class TestRaptorIntegrationSmokeTest
                         .add(BIGINT) // bucket_count
                         .add(new ArrayType(VARCHAR)) // bucket_columns
                         .add(BOOLEAN) // organized
+                        .add(BOOLEAN) // table_supports_delta_delete
                         .build());
         Map<String, MaterializedRow> map = actualResults.getMaterializedRows().stream()
                 .filter(row -> ((String) row.getField(1)).startsWith("system_tables_test"))
                 .collect(toImmutableMap(row -> ((String) row.getField(1)), identity()));
-        assertEquals(map.size(), 6);
+        assertEquals(map.size(), 7);
         assertEquals(
                 map.get("system_tables_test0").getFields(),
-                asList("tpch", "system_tables_test0", null, null, null, null, null, Boolean.FALSE));
+                asList("tpch", "system_tables_test0", null, null, null, null, null, Boolean.FALSE, Boolean.FALSE));
         assertEquals(
                 map.get("system_tables_test1").getFields(),
-                asList("tpch", "system_tables_test1", "c10", null, null, null, null, Boolean.FALSE));
+                asList("tpch", "system_tables_test1", "c10", null, null, null, null, Boolean.FALSE, Boolean.FALSE));
         assertEquals(
                 map.get("system_tables_test2").getFields(),
-                asList("tpch", "system_tables_test2", "c20", ImmutableList.of("c22", "c21"), null, null, null, Boolean.FALSE));
+                asList("tpch", "system_tables_test2", "c20", ImmutableList.of("c22", "c21"), null, null, null, Boolean.FALSE, Boolean.FALSE));
         assertEquals(
                 map.get("system_tables_test3").getFields(),
-                asList("tpch", "system_tables_test3", "c30", null, null, 40L, ImmutableList.of("c34", "c33"), Boolean.FALSE));
+                asList("tpch", "system_tables_test3", "c30", null, null, 40L, ImmutableList.of("c34", "c33"), Boolean.FALSE, Boolean.FALSE));
         assertEquals(
                 map.get("system_tables_test4").getFields(),
-                asList("tpch", "system_tables_test4", "c40", ImmutableList.of("c41", "c42"), "test_distribution", 50L, ImmutableList.of("c43", "c44"), Boolean.FALSE));
+                asList("tpch", "system_tables_test4", "c40", ImmutableList.of("c41", "c42"), "test_distribution", 50L, ImmutableList.of("c43", "c44"), Boolean.FALSE, Boolean.FALSE));
         assertEquals(
                 map.get("system_tables_test5").getFields(),
-                asList("tpch", "system_tables_test5", null, ImmutableList.of("c51", "c52"), "test_distribution", 50L, ImmutableList.of("c53", "c54"), Boolean.TRUE));
+                asList("tpch", "system_tables_test5", null, ImmutableList.of("c51", "c52"), "test_distribution", 50L, ImmutableList.of("c53", "c54"), Boolean.TRUE, Boolean.FALSE));
+        assertEquals(
+                map.get("system_tables_test6").getFields(),
+                asList("tpch", "system_tables_test6", null, ImmutableList.of("c61", "c62"), "test_distribution", 50L, ImmutableList.of("c63", "c64"), Boolean.TRUE, Boolean.TRUE));
 
         actualResults = computeActual("SELECT * FROM system.tables WHERE table_schema = 'tpch'");
         long actualRowCount = actualResults.getMaterializedRows().stream()
                 .filter(row -> ((String) row.getField(1)).startsWith("system_tables_test"))
                 .count();
-        assertEquals(actualRowCount, 6);
+        assertEquals(actualRowCount, 7);
 
         actualResults = computeActual("SELECT * FROM system.tables WHERE table_name = 'system_tables_test3'");
         assertEquals(actualResults.getMaterializedRows().size(), 1);
@@ -651,6 +740,7 @@ public class TestRaptorIntegrationSmokeTest
         assertUpdate("DROP TABLE system_tables_test3");
         assertUpdate("DROP TABLE system_tables_test4");
         assertUpdate("DROP TABLE system_tables_test5");
+        assertUpdate("DROP TABLE system_tables_test6");
 
         assertEquals(computeActual("SELECT * FROM system.tables WHERE table_schema IN ('foo', 'bar')").getRowCount(), 0);
     }
@@ -743,6 +833,76 @@ public class TestRaptorIntegrationSmokeTest
         assertUpdate("DROP TABLE test_table_stats");
     }
 
+    @SuppressWarnings("OverlyStrongTypeCast")
+    @Test
+    public void testTableStatsSystemTableWithDeltaDelete()
+    {
+        // create empty table
+        assertUpdate("CREATE TABLE test_table_stats_with_delta_delete (x bigint) WITH (table_supports_delta_delete = true)");
+
+        @Language("SQL") String sql = "" +
+                "SELECT create_time, update_time, table_version," +
+                "  shard_count, row_count, uncompressed_size, delta_count\n" +
+                "FROM system.table_stats\n" +
+                "WHERE table_schema = 'tpch'\n" +
+                "  AND table_name = 'test_table_stats_with_delta_delete'";
+        MaterializedRow row = getOnlyElement(computeActual(sql).getMaterializedRows());
+
+        LocalDateTime createTime = (LocalDateTime) row.getField(0);
+        LocalDateTime updateTime1 = (LocalDateTime) row.getField(1);
+        assertEquals(createTime, updateTime1);
+
+        assertEquals(row.getField(2), 1L);      // table_version
+        assertEquals(row.getField(3), 0L);      // shard_count
+        assertEquals(row.getField(4), 0L);      // row_count
+        long size1 = (long) row.getField(5);    // uncompressed_size
+
+        // insert
+        assertUpdate("INSERT INTO test_table_stats_with_delta_delete VALUES (1), (2), (3), (4)", 4);
+        row = getOnlyElement(computeActual(sql).getMaterializedRows());
+
+        assertEquals(row.getField(0), createTime);
+        LocalDateTime updateTime2 = (LocalDateTime) row.getField(1);
+        assertLessThan(updateTime1, updateTime2);
+
+        assertEquals(row.getField(2), 2L);                    // table_version
+        assertGreaterThanOrEqual((Long) row.getField(3), 1L); // shard_count
+        assertEquals(row.getField(4), 4L);                    // row_count
+        assertGreaterThanOrEqual((Long) row.getField(6), 0L); // delta_count
+        long size2 = (long) row.getField(5);                  // uncompressed_size
+        assertGreaterThan(size2, size1);
+
+        // delete
+        assertUpdate("DELETE FROM test_table_stats_with_delta_delete WHERE x IN (2, 4)", 2);
+        row = getOnlyElement(computeActual(sql).getMaterializedRows());
+
+        assertEquals(row.getField(0), createTime);
+        LocalDateTime updateTime3 = (LocalDateTime) row.getField(1);
+        assertLessThan(updateTime2, updateTime3);
+
+        assertEquals(row.getField(2), 3L);                    // table_version
+        assertGreaterThanOrEqual((Long) row.getField(3), 1L); // shard_count
+        assertEquals(row.getField(4), 2L);                    // row_count
+        assertGreaterThanOrEqual((Long) row.getField(6), 1L); // delta_count
+        long size3 = (long) row.getField(5);                  // uncompressed_Size
+        // without compaction, the size will grow with delta delete
+        assertGreaterThan(size3, size2);
+
+        // add column
+        assertUpdate("ALTER TABLE test_table_stats_with_delta_delete ADD COLUMN y bigint");
+        row = getOnlyElement(computeActual(sql).getMaterializedRows());
+
+        assertEquals(row.getField(0), createTime);
+        assertLessThan(updateTime3, (LocalDateTime) row.getField(1));
+
+        assertEquals(row.getField(2), 4L);      // table_version
+        assertEquals(row.getField(4), 2L);      // row_count
+        assertEquals(row.getField(5), size3);   // uncompressed_size
+
+        // cleanup
+        assertUpdate("DROP TABLE test_table_stats_with_delta_delete");
+    }
+
     @Test
     public void testAlterTable()
     {
@@ -773,6 +933,14 @@ public class TestRaptorIntegrationSmokeTest
     }
 
     @Test
+    public void testAlterTableUnsupportedType()
+    {
+        assertUpdate("CREATE TABLE test_alter_table_unsupported_type (c1 bigint, c2 bigint)");
+        assertQueryFails("ALTER TABLE test_alter_table_unsupported_type ADD COLUMN c3 row(bigint)", "Type not supported: row\\(bigint\\)");
+        assertUpdate("DROP TABLE test_alter_table_unsupported_type");
+    }
+
+    @Test
     public void testDelete()
     {
         assertUpdate("CREATE TABLE test_delete_table (c1 bigint, c2 bigint)");
@@ -794,5 +962,38 @@ public class TestRaptorIntegrationSmokeTest
         assertQuery("SELECT * FROM test_delete_table", "VALUES (3, 1), (3, 2), (3, 3), (3, 4)");
 
         assertUpdate("DROP TABLE test_delete_table");
+    }
+
+    @Test
+    public void testDeltaDelete()
+    {
+        assertUpdate("CREATE TABLE test_delta_delete_table (c1 bigint, c2 bigint) WITH (table_supports_delta_delete = true)");
+        assertUpdate("INSERT INTO test_delta_delete_table VALUES (1, 1), (1, 2), (1, 3), (1, 4), (11, 1), (11, 2)", 6);
+
+        assertUpdate("ALTER TABLE test_delta_delete_table ADD COLUMN c3 bigint");
+        assertUpdate("INSERT INTO test_delta_delete_table VALUES (2, 1, 1), (2, 2, 2), (2, 3, 3), (2, 4, 4), (22, 1, 1), (22, 2, 2), (22, 4, 4)", 7);
+
+        assertUpdate("DELETE FROM test_delta_delete_table WHERE c1 = 1", 4);
+        assertQuery("SELECT * FROM test_delta_delete_table", "VALUES (11, 1, NULL), (11, 2, NULL), (2, 1, 1), (2, 2, 2), (2, 3, 3), (2, 4, 4), (22, 1, 1), (22, 2, 2), (22, 4, 4)");
+
+        assertUpdate("DELETE FROM test_delta_delete_table WHERE c1 = 1", 0);
+        assertQuery("SELECT * FROM test_delta_delete_table", "VALUES (11, 1, NULL), (11, 2, NULL), (2, 1, 1), (2, 2, 2), (2, 3, 3), (2, 4, 4), (22, 1, 1), (22, 2, 2), (22, 4, 4)");
+
+        assertUpdate("ALTER TABLE test_delta_delete_table DROP COLUMN c2");
+        assertUpdate("INSERT INTO test_delta_delete_table VALUES (3, 1), (3, 2), (3, 3), (3, 4)", 4);
+
+        assertUpdate("DELETE FROM test_delta_delete_table WHERE c1 = 2", 4);
+        assertQuery("SELECT * FROM test_delta_delete_table", "VALUES (11, NULL), (11, NULL), (22, 1), (22, 2), (22, 4), (3, 1), (3, 2), (3, 3), (3, 4)");
+
+        assertUpdate("DELETE FROM test_delta_delete_table WHERE c1 % 11 = 0", 5);
+        assertQuery("SELECT * FROM test_delta_delete_table", "VALUES (3, 1), (3, 2), (3, 3), (3, 4)");
+
+        assertUpdate("DROP TABLE test_delta_delete_table");
+    }
+
+    @Test
+    public void testTriggerBucketBalancer()
+    {
+        assertUpdate("CALL system.trigger_bucket_balancer()");
     }
 }

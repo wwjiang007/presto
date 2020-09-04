@@ -13,13 +13,13 @@
  */
 package com.facebook.presto.hive.parquet;
 
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.SqlDate;
-import com.facebook.presto.spi.type.SqlDecimal;
-import com.facebook.presto.spi.type.SqlTimestamp;
-import com.facebook.presto.spi.type.SqlVarbinary;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.SqlDate;
+import com.facebook.presto.common.type.SqlDecimal;
+import com.facebook.presto.common.type.SqlTimestamp;
+import com.facebook.presto.common.type.SqlVarbinary;
+import com.facebook.presto.common.type.Type;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.AbstractSequentialIterator;
 import com.google.common.collect.ContiguousSet;
@@ -27,6 +27,7 @@ import com.google.common.collect.DiscreteDomain;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Range;
 import com.google.common.primitives.Shorts;
+import io.airlift.units.DataSize;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.JavaHiveDecimalObjectInspector;
@@ -59,21 +60,21 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DecimalType.createDecimalType;
+import static com.facebook.presto.common.type.Decimals.MAX_PRECISION;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.RowType.field;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
+import static com.facebook.presto.common.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.hive.parquet.ParquetTester.HIVE_STORAGE_TIME_ZONE;
 import static com.facebook.presto.hive.parquet.ParquetTester.insertNullEvery;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
-import static com.facebook.presto.spi.type.Decimals.MAX_PRECISION;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.RowType.field;
-import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.testing.DateTimeTestingUtils.sqlTimestampOf;
 import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
 import static com.facebook.presto.tests.StructuralTestUtil.mapType;
@@ -1492,6 +1493,43 @@ public abstract class AbstractTestParquetReader
         Logger.getLogger("parquet.hadoop.ColumnChunkPageWriteStore").setLevel(Level.WARNING);
     }
 
+    @Test
+    public void testStructMaxReadBytes()
+            throws Exception
+    {
+        DataSize maxReadBlockSize = new DataSize(1_000, DataSize.Unit.BYTE);
+        List<List> structValues = createTestStructs(
+                Collections.nCopies(500, String.join("", Collections.nCopies(33, "test"))),
+                Collections.nCopies(500, String.join("", Collections.nCopies(1, "test"))));
+        List<String> structFieldNames = asList("a", "b");
+        Type structType = RowType.from(asList(field("a", VARCHAR), field("b", VARCHAR)));
+
+        tester.testMaxReadBytes(
+                getStandardStructObjectInspector(structFieldNames, asList(javaStringObjectInspector, javaStringObjectInspector)),
+                structValues,
+                structValues,
+                structType,
+                maxReadBlockSize);
+    }
+
+    @Test
+    public void testArrayMaxReadBytes()
+            throws Exception
+    {
+        DataSize maxReadBlockSize = new DataSize(1_000, DataSize.Unit.BYTE);
+        Iterable<List<Integer>> values = createFixedTestArrays(limit(cycle(asList(1, null, 3, 5, null, null, null, 7, 11, null, 13, 17)), 30_000));
+        tester.testMaxReadBytes(getStandardListObjectInspector(javaIntObjectInspector), values, values, new ArrayType(INTEGER), maxReadBlockSize);
+    }
+
+    @Test
+    public void testMapMaxReadBytes()
+            throws Exception
+    {
+        DataSize maxReadBlockSize = new DataSize(1_000, DataSize.Unit.BYTE);
+        Iterable<Map<String, Long>> values = createFixedTestMaps(Collections.nCopies(5_000, String.join("", Collections.nCopies(33, "test"))), longsBetween(0, 5_000));
+        tester.testMaxReadBytes(getStandardMapObjectInspector(javaStringObjectInspector, javaLongObjectInspector), values, values, mapType(VARCHAR, BIGINT), maxReadBlockSize);
+    }
+
     private static <T> Iterable<T> repeatEach(int n, Iterable<T> iterable)
     {
         return () -> new AbstractIterator<T>()
@@ -1609,6 +1647,47 @@ public abstract class AbstractTestParquetReader
     private <T> Iterable<List<T>> createNullableTestArrays(Iterable<T> values)
     {
         return insertNullEvery(ThreadLocalRandom.current().nextInt(2, 5), createTestArrays(values));
+    }
+
+    private <T> List<List<T>> createFixedTestArrays(Iterable<T> values)
+    {
+        List<List<T>> arrays = new ArrayList<>();
+        Iterator<T> valuesIter = values.iterator();
+        List<T> array = new ArrayList<>();
+        int count = 1;
+        while (valuesIter.hasNext()) {
+            if (count % 10 == 0) {
+                arrays.add(array);
+                array = new ArrayList<>();
+            }
+            if (count % 20 == 0) {
+                arrays.add(Collections.emptyList());
+            }
+            array.add(valuesIter.next());
+            ++count;
+        }
+        return arrays;
+    }
+
+    private <K, V> Iterable<Map<K, V>> createFixedTestMaps(Iterable<K> keys, Iterable<V> values)
+    {
+        List<Map<K, V>> maps = new ArrayList<>();
+        Iterator<K> keysIterator = keys.iterator();
+        Iterator<V> valuesIterator = values.iterator();
+        Map<K, V> map = new HashMap<>();
+        int count = 1;
+        while (keysIterator.hasNext() && valuesIterator.hasNext()) {
+            if (count % 5 == 0) {
+                maps.add(map);
+                map = new HashMap<>();
+            }
+            if (count % 10 == 0) {
+                maps.add(Collections.emptyMap());
+            }
+            map.put(keysIterator.next(), valuesIterator.next());
+            ++count;
+        }
+        return maps;
     }
 
     private <K, V> Iterable<Map<K, V>> createTestMaps(Iterable<K> keys, Iterable<V> values)

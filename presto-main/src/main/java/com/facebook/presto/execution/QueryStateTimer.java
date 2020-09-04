@@ -21,11 +21,12 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static io.airlift.units.Duration.succinctNanos;
+import static java.lang.Math.max;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
-class QueryStateTimer
+public class QueryStateTimer
 {
     private final Ticker ticker;
 
@@ -33,12 +34,14 @@ class QueryStateTimer
 
     private final long createNanos;
     private final AtomicReference<Long> beginResourceWaitingNanos = new AtomicReference<>();
+    private final AtomicReference<Long> beginDispatchingNanos = new AtomicReference<>();
     private final AtomicReference<Long> beginPlanningNanos = new AtomicReference<>();
     private final AtomicReference<Long> beginFinishingNanos = new AtomicReference<>();
     private final AtomicReference<Long> endNanos = new AtomicReference<>();
 
     private final AtomicReference<Duration> queuedTime = new AtomicReference<>();
     private final AtomicReference<Duration> resourceWaitingTime = new AtomicReference<>();
+    private final AtomicReference<Duration> dispatchingTime = new AtomicReference<>();
     private final AtomicReference<Duration> executionTime = new AtomicReference<>();
     private final AtomicReference<Duration> planningTime = new AtomicReference<>();
     private final AtomicReference<Duration> finishingTime = new AtomicReference<>();
@@ -70,6 +73,18 @@ class QueryStateTimer
         beginResourceWaitingNanos.compareAndSet(null, now);
     }
 
+    public void beginDispatching()
+    {
+        beginDispatching(tickerNanos());
+    }
+
+    private void beginDispatching(long now)
+    {
+        beginWaitingForResources(now);
+        resourceWaitingTime.compareAndSet(null, nanosSince(beginResourceWaitingNanos, now));
+        beginDispatchingNanos.compareAndSet(null, now);
+    }
+
     public void beginPlanning()
     {
         beginPlanning(tickerNanos());
@@ -77,8 +92,8 @@ class QueryStateTimer
 
     private void beginPlanning(long now)
     {
-        beginWaitingForResources(now);
-        resourceWaitingTime.compareAndSet(null, nanosSince(beginResourceWaitingNanos, now));
+        beginDispatching(now);
+        dispatchingTime.compareAndSet(null, nanosSince(beginDispatchingNanos, now));
         beginPlanningNanos.compareAndSet(null, now);
     }
 
@@ -184,6 +199,11 @@ class QueryStateTimer
         return getDuration(resourceWaitingTime, beginResourceWaitingNanos);
     }
 
+    public Duration getDispatchingTime()
+    {
+        return getDuration(dispatchingTime, beginDispatchingNanos);
+    }
+
     public Duration getPlanningTime()
     {
         return getDuration(planningTime, beginPlanningNanos);
@@ -234,7 +254,7 @@ class QueryStateTimer
 
     private static Duration nanosSince(long start, long now)
     {
-        return succinctNanos(now - start);
+        return succinctNanos(max(0, now - start));
     }
 
     private Duration getDuration(AtomicReference<Duration> finalDuration, AtomicReference<Long> start)

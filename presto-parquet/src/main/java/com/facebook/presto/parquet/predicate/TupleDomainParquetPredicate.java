@@ -13,16 +13,16 @@
  */
 package com.facebook.presto.parquet.predicate;
 
+import com.facebook.presto.common.predicate.Domain;
+import com.facebook.presto.common.predicate.Range;
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.predicate.ValueSet;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.parquet.DictionaryPage;
 import com.facebook.presto.parquet.ParquetCorruptionException;
 import com.facebook.presto.parquet.ParquetDataSourceId;
 import com.facebook.presto.parquet.RichColumnDescriptor;
 import com.facebook.presto.parquet.dictionary.Dictionary;
-import com.facebook.presto.spi.predicate.Domain;
-import com.facebook.presto.spi.predicate.Range;
-import com.facebook.presto.spi.predicate.TupleDomain;
-import com.facebook.presto.spi.predicate.ValueSet;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
@@ -44,16 +44,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.Varchars.isVarcharType;
 import static com.facebook.presto.parquet.predicate.PredicateUtils.isStatisticsOverflow;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static java.lang.Float.floatToRawIntBits;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -106,8 +106,9 @@ public class TupleDomainParquetPredicate
     }
 
     @Override
-    public boolean matches(Map<ColumnDescriptor, DictionaryDescriptor> dictionaries)
+    public boolean matches(DictionaryDescriptor dictionary)
     {
+        requireNonNull(dictionary, "dictionary is null");
         if (effectivePredicate.isNone()) {
             return false;
         }
@@ -115,18 +116,14 @@ public class TupleDomainParquetPredicate
         Map<ColumnDescriptor, Domain> effectivePredicateDomains = effectivePredicate.getDomains()
                 .orElseThrow(() -> new IllegalStateException("Effective predicate other than none should have domains"));
 
-        for (RichColumnDescriptor column : columns) {
-            Domain effectivePredicateDomain = effectivePredicateDomains.get(column);
-            if (effectivePredicateDomain == null) {
-                continue;
-            }
-            DictionaryDescriptor dictionaryDescriptor = dictionaries.get(column);
-            Domain domain = getDomain(effectivePredicateDomain.getType(), dictionaryDescriptor);
-            if (effectivePredicateDomain.intersect(domain).isNone()) {
-                return false;
-            }
-        }
-        return true;
+        Domain effectivePredicateDomain = effectivePredicateDomains.get(dictionary.getColumnDescriptor());
+
+        return effectivePredicateDomain == null || effectivePredicateMatches(effectivePredicateDomain, dictionary);
+    }
+
+    private static boolean effectivePredicateMatches(Domain effectivePredicateDomain, DictionaryDescriptor dictionary)
+    {
+        return !effectivePredicateDomain.intersect(getDomain(effectivePredicateDomain.getType(), dictionary)).isNone();
     }
 
     @VisibleForTesting
@@ -143,7 +140,7 @@ public class TupleDomainParquetPredicate
 
         boolean hasNullValue = statistics.getNumNulls() != 0L;
 
-        if (statistics.genericGetMin() == null || statistics.genericGetMax() == null) {
+        if (!statistics.hasNonNullValue() || statistics.genericGetMin() == null || statistics.genericGetMax() == null) {
             return Domain.create(ValueSet.all(type), hasNullValue);
         }
 
@@ -196,6 +193,10 @@ public class TupleDomainParquetPredicate
                 return Domain.create(ValueSet.all(type), hasNullValue);
             }
 
+            if (floatStatistics.genericGetMin().isNaN() || floatStatistics.genericGetMax().isNaN()) {
+                return Domain.create(ValueSet.all(type), hasNullValue);
+            }
+
             ParquetIntegerStatistics parquetStatistics = new ParquetIntegerStatistics(
                     (long) floatToRawIntBits(floatStatistics.getMin()),
                     (long) floatToRawIntBits(floatStatistics.getMax()));
@@ -209,6 +210,11 @@ public class TupleDomainParquetPredicate
                 failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, doubleStatistics);
                 return Domain.create(ValueSet.all(type), hasNullValue);
             }
+
+            if (doubleStatistics.genericGetMin().isNaN() || doubleStatistics.genericGetMax().isNaN()) {
+                return Domain.create(ValueSet.all(type), hasNullValue);
+            }
+
             ParquetDoubleStatistics parquetDoubleStatistics = new ParquetDoubleStatistics(doubleStatistics.genericGetMin(), doubleStatistics.genericGetMax());
             return createDomain(type, hasNullValue, parquetDoubleStatistics);
         }
@@ -284,7 +290,11 @@ public class TupleDomainParquetPredicate
         if (type.equals(DOUBLE) && columnDescriptor.getType() == PrimitiveTypeName.DOUBLE) {
             List<Domain> domains = new ArrayList<>();
             for (int i = 0; i < dictionarySize; i++) {
-                domains.add(Domain.singleValue(type, dictionary.decodeToDouble(i)));
+                double value = dictionary.decodeToDouble(i);
+                if (Double.isNaN(value)) {
+                    return Domain.all(type);
+                }
+                domains.add(Domain.singleValue(type, value));
             }
             domains.add(Domain.onlyNull(type));
             return Domain.union(domains);
@@ -293,7 +303,11 @@ public class TupleDomainParquetPredicate
         if (type.equals(DOUBLE) && columnDescriptor.getType() == PrimitiveTypeName.FLOAT) {
             List<Domain> domains = new ArrayList<>();
             for (int i = 0; i < dictionarySize; i++) {
-                domains.add(Domain.singleValue(type, (double) dictionary.decodeToFloat(i)));
+                float value = dictionary.decodeToFloat(i);
+                if (Float.isNaN(value)) {
+                    return Domain.all(type);
+                }
+                domains.add(Domain.singleValue(type, (double) value));
             }
             domains.add(Domain.onlyNull(type));
             return Domain.union(domains);

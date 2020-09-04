@@ -14,20 +14,22 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.client.NodeVersion;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.execution.scheduler.FlatNetworkTopology;
 import com.facebook.presto.execution.scheduler.LegacyNetworkTopology;
 import com.facebook.presto.execution.scheduler.NetworkLocation;
 import com.facebook.presto.execution.scheduler.NetworkTopology;
 import com.facebook.presto.execution.scheduler.NodeScheduler;
 import com.facebook.presto.execution.scheduler.NodeSchedulerConfig;
-import com.facebook.presto.execution.scheduler.NodeSelector;
+import com.facebook.presto.execution.scheduler.nodeSelection.NodeSelectionStats;
+import com.facebook.presto.execution.scheduler.nodeSelection.NodeSelector;
 import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.HostAddress;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.schedule.NodeSelectionStrategy;
 import com.facebook.presto.testing.TestingTransactionHandle;
 import com.facebook.presto.util.FinalizerService;
 import com.google.common.base.Splitter;
@@ -65,10 +67,11 @@ import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.execution.scheduler.NodeSchedulerConfig.NetworkTopologyType.BENCHMARK;
 import static com.facebook.presto.execution.scheduler.NodeSchedulerConfig.NetworkTopologyType.FLAT;
 import static com.facebook.presto.execution.scheduler.NodeSchedulerConfig.NetworkTopologyType.LEGACY;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
+import static com.facebook.presto.spi.schedule.NodeSelectionStrategy.NO_PREFERENCE;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 
@@ -158,7 +161,7 @@ public class BenchmarkNodeScheduler
                 for (int j = 0; j < MAX_SPLITS_PER_NODE + MAX_PENDING_SPLITS_PER_TASK_PER_NODE; j++) {
                     initialSplits.add(new Split(CONNECTOR_ID, transactionHandle, new TestSplitRemote(i)));
                 }
-                TaskId taskId = new TaskId("test", 1, i);
+                TaskId taskId = new TaskId("test", 1, 0, i);
                 MockRemoteTaskFactory.MockRemoteTask remoteTask = remoteTaskFactory.createTableScanTask(taskId, node, initialSplits.build(), nodeTaskMap.createPartitionedSplitCountTracker(node, taskId));
                 nodeTaskMap.addTask(node, remoteTask);
                 taskMap.put(node, remoteTask);
@@ -170,7 +173,7 @@ public class BenchmarkNodeScheduler
 
             InMemoryNodeManager nodeManager = new InMemoryNodeManager();
             nodeManager.addNode(CONNECTOR_ID, nodes);
-            NodeScheduler nodeScheduler = new NodeScheduler(getNetworkTopology(), nodeManager, getNodeSchedulerConfig(), nodeTaskMap);
+            NodeScheduler nodeScheduler = new NodeScheduler(getNetworkTopology(), nodeManager, new NodeSelectionStats(), getNodeSchedulerConfig(), nodeTaskMap);
             nodeSelector = nodeScheduler.createNodeSelector(CONNECTOR_ID);
         }
 
@@ -263,13 +266,13 @@ public class BenchmarkNodeScheduler
         }
 
         @Override
-        public boolean isRemotelyAccessible()
+        public NodeSelectionStrategy getNodeSelectionStrategy()
         {
-            return true;
+            return NO_PREFERENCE;
         }
 
         @Override
-        public List<HostAddress> getAddresses()
+        public List<HostAddress> getPreferredNodes(List<HostAddress> sortedCandidates)
         {
             return hosts;
         }

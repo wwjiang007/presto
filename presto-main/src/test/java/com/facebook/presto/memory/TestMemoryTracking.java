@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.memory;
 
+import com.facebook.airlift.stats.TestingGcMonitor;
 import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskStateMachine;
@@ -28,23 +29,21 @@ import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SpillSpaceTracker;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.util.OptionalInt;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static java.lang.String.format;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -101,6 +100,7 @@ public class TestMemoryTracking
                 new QueryId("test_query"),
                 queryMaxMemory,
                 queryMaxTotalMemory,
+                queryMaxMemory,
                 memoryPool,
                 new TestingGcMonitor(),
                 notificationExecutor,
@@ -108,11 +108,12 @@ public class TestMemoryTracking
                 queryMaxSpillSize,
                 spillSpaceTracker);
         taskContext = queryContext.addTaskContext(
-                new TaskStateMachine(new TaskId("query", 0, 0), notificationExecutor),
+                new TaskStateMachine(new TaskId("query", 0, 0, 0), notificationExecutor),
                 testSessionBuilder().build(),
                 true,
                 true,
-                OptionalInt.empty(),
+                true,
+                true,
                 false);
         pipelineContext = taskContext.addPipelineContext(0, true, true, false);
         driverContext = pipelineContext.addDriverContext();
@@ -178,7 +179,7 @@ public class TestMemoryTracking
                 pipelineLocalAllocation + taskLocalAllocation,
                 0,
                 taskLocalAllocation);
-        assertEquals(pipelineContext.getPipelineStats().getSystemMemoryReservation().toBytes(),
+        assertEquals(pipelineContext.getPipelineStats().getSystemMemoryReservationInBytes(),
                 pipelineLocalAllocation,
                 "task level allocations should not be visible at the pipeline level");
         pipelineLocalSystemMemoryContext.setBytes(pipelineLocalSystemMemoryContext.getBytes() - pipelineLocalAllocation);
@@ -365,18 +366,18 @@ public class TestMemoryTracking
     {
         assertEquals(operatorStats.getUserMemoryReservation().toBytes(), expectedUserMemory);
         assertEquals(driverStats.getUserMemoryReservation().toBytes(), expectedUserMemory);
-        assertEquals(pipelineStats.getUserMemoryReservation().toBytes(), expectedUserMemory);
-        assertEquals(taskStats.getUserMemoryReservation().toBytes(), expectedUserMemory);
+        assertEquals(pipelineStats.getUserMemoryReservationInBytes(), expectedUserMemory);
+        assertEquals(taskStats.getUserMemoryReservationInBytes(), expectedUserMemory);
 
         assertEquals(operatorStats.getSystemMemoryReservation().toBytes(), expectedSystemMemory);
         assertEquals(driverStats.getSystemMemoryReservation().toBytes(), expectedSystemMemory);
-        assertEquals(pipelineStats.getSystemMemoryReservation().toBytes(), expectedSystemMemory);
-        assertEquals(taskStats.getSystemMemoryReservation().toBytes(), expectedSystemMemory);
+        assertEquals(pipelineStats.getSystemMemoryReservationInBytes(), expectedSystemMemory);
+        assertEquals(taskStats.getSystemMemoryReservationInBytes(), expectedSystemMemory);
 
         assertEquals(operatorStats.getRevocableMemoryReservation().toBytes(), expectedRevocableMemory);
         assertEquals(driverStats.getRevocableMemoryReservation().toBytes(), expectedRevocableMemory);
-        assertEquals(pipelineStats.getRevocableMemoryReservation().toBytes(), expectedRevocableMemory);
-        assertEquals(taskStats.getRevocableMemoryReservation().toBytes(), expectedRevocableMemory);
+        assertEquals(pipelineStats.getRevocableMemoryReservationInBytes(), expectedRevocableMemory);
+        assertEquals(taskStats.getRevocableMemoryReservationInBytes(), expectedRevocableMemory);
     }
 
     private void assertAllocationFails(Consumer<Void> allocationFunction, String expectedPattern)

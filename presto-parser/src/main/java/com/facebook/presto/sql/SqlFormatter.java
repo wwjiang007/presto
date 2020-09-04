@@ -16,12 +16,15 @@ package com.facebook.presto.sql;
 import com.facebook.presto.sql.tree.AddColumn;
 import com.facebook.presto.sql.tree.AliasedRelation;
 import com.facebook.presto.sql.tree.AllColumns;
+import com.facebook.presto.sql.tree.AlterFunction;
+import com.facebook.presto.sql.tree.AlterRoutineCharacteristics;
 import com.facebook.presto.sql.tree.Analyze;
 import com.facebook.presto.sql.tree.AstVisitor;
 import com.facebook.presto.sql.tree.Call;
 import com.facebook.presto.sql.tree.CallArgument;
 import com.facebook.presto.sql.tree.ColumnDefinition;
 import com.facebook.presto.sql.tree.Commit;
+import com.facebook.presto.sql.tree.CreateFunction;
 import com.facebook.presto.sql.tree.CreateRole;
 import com.facebook.presto.sql.tree.CreateSchema;
 import com.facebook.presto.sql.tree.CreateTable;
@@ -32,6 +35,7 @@ import com.facebook.presto.sql.tree.Delete;
 import com.facebook.presto.sql.tree.DescribeInput;
 import com.facebook.presto.sql.tree.DescribeOutput;
 import com.facebook.presto.sql.tree.DropColumn;
+import com.facebook.presto.sql.tree.DropFunction;
 import com.facebook.presto.sql.tree.DropRole;
 import com.facebook.presto.sql.tree.DropSchema;
 import com.facebook.presto.sql.tree.DropTable;
@@ -43,6 +47,7 @@ import com.facebook.presto.sql.tree.ExplainFormat;
 import com.facebook.presto.sql.tree.ExplainOption;
 import com.facebook.presto.sql.tree.ExplainType;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.ExternalBodyReference;
 import com.facebook.presto.sql.tree.Grant;
 import com.facebook.presto.sql.tree.GrantRoles;
 import com.facebook.presto.sql.tree.GrantorSpecification;
@@ -70,19 +75,21 @@ import com.facebook.presto.sql.tree.RenameColumn;
 import com.facebook.presto.sql.tree.RenameSchema;
 import com.facebook.presto.sql.tree.RenameTable;
 import com.facebook.presto.sql.tree.ResetSession;
+import com.facebook.presto.sql.tree.Return;
 import com.facebook.presto.sql.tree.Revoke;
 import com.facebook.presto.sql.tree.RevokeRoles;
 import com.facebook.presto.sql.tree.Rollback;
+import com.facebook.presto.sql.tree.RoutineCharacteristics;
 import com.facebook.presto.sql.tree.Row;
 import com.facebook.presto.sql.tree.SampledRelation;
 import com.facebook.presto.sql.tree.Select;
 import com.facebook.presto.sql.tree.SelectItem;
-import com.facebook.presto.sql.tree.SetPath;
 import com.facebook.presto.sql.tree.SetRole;
 import com.facebook.presto.sql.tree.SetSession;
 import com.facebook.presto.sql.tree.ShowCatalogs;
 import com.facebook.presto.sql.tree.ShowColumns;
 import com.facebook.presto.sql.tree.ShowCreate;
+import com.facebook.presto.sql.tree.ShowCreateFunction;
 import com.facebook.presto.sql.tree.ShowFunctions;
 import com.facebook.presto.sql.tree.ShowGrants;
 import com.facebook.presto.sql.tree.ShowRoleGrants;
@@ -92,6 +99,7 @@ import com.facebook.presto.sql.tree.ShowSession;
 import com.facebook.presto.sql.tree.ShowStats;
 import com.facebook.presto.sql.tree.ShowTables;
 import com.facebook.presto.sql.tree.SingleColumn;
+import com.facebook.presto.sql.tree.SqlParameterDeclaration;
 import com.facebook.presto.sql.tree.StartTransaction;
 import com.facebook.presto.sql.tree.Table;
 import com.facebook.presto.sql.tree.TableSubquery;
@@ -104,6 +112,7 @@ import com.facebook.presto.sql.tree.With;
 import com.facebook.presto.sql.tree.WithQuery;
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableList;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -490,9 +499,7 @@ public final class SqlFormatter
 
                 if (relations.hasNext()) {
                     builder.append("UNION ");
-                    if (!node.isDistinct()) {
-                        builder.append("ALL ");
-                    }
+                    node.isDistinct().map(distinct -> distinct ? builder.append("DISTINCT ") : builder.append("ALL "));
                 }
             }
 
@@ -505,9 +512,7 @@ public final class SqlFormatter
             processRelation(node.getLeft(), indent);
 
             builder.append("EXCEPT ");
-            if (!node.isDistinct()) {
-                builder.append("ALL ");
-            }
+            node.isDistinct().map(distinct -> distinct ? builder.append("DISTINCT ") : builder.append("ALL "));
 
             processRelation(node.getRight(), indent);
 
@@ -524,9 +529,7 @@ public final class SqlFormatter
 
                 if (relations.hasNext()) {
                     builder.append("INTERSECT ");
-                    if (!node.isDistinct()) {
-                        builder.append("ALL ");
-                    }
+                    node.isDistinct().map(distinct -> distinct ? builder.append("DISTINCT ") : builder.append("ALL "));
                 }
             }
 
@@ -541,10 +544,84 @@ public final class SqlFormatter
                 builder.append("OR REPLACE ");
             }
             builder.append("VIEW ")
-                    .append(formatName(node.getName()))
-                    .append(" AS\n");
+                    .append(formatName(node.getName()));
+
+            node.getSecurity().ifPresent(security ->
+                    builder.append(" SECURITY ")
+                            .append(security.toString())
+                            .append(" "));
+
+            builder.append(" AS\n");
 
             process(node.getQuery(), indent);
+
+            return null;
+        }
+
+        @Override
+        protected Void visitCreateFunction(CreateFunction node, Integer indent)
+        {
+            builder.append("CREATE FUNCTION ")
+                    .append(formatName(node.getFunctionName()))
+                    .append(" ")
+                    .append(formatSqlParameterDeclarations(node.getParameters()))
+                    .append("\nRETURNS ")
+                    .append(node.getReturnType());
+            if (node.getComment().isPresent()) {
+                builder.append("\nCOMMENT ")
+                        .append(formatStringLiteral(node.getComment().get()));
+            }
+            builder.append("\n")
+                    .append(formatRoutineCharacteristics(node.getCharacteristics()))
+                    .append("\n");
+
+            process(node.getBody(), 0);
+
+            return null;
+        }
+
+        @Override
+        protected Void visitAlterFunction(AlterFunction node, Integer indent)
+        {
+            builder.append("ALTER FUNCTION ")
+                    .append(formatName(node.getFunctionName()));
+            node.getParameterTypes().map(Formatter::formatTypeList).ifPresent(builder::append);
+            builder.append("\n")
+                    .append(formatAlterRoutineCharacteristics(node.getCharacteristics()));
+
+            return null;
+        }
+
+        @Override
+        protected Void visitDropFunction(DropFunction node, Integer indent)
+        {
+            builder.append("DROP FUNCTION ");
+            if (node.isExists()) {
+                builder.append("IF EXISTS ");
+            }
+            builder.append(formatName(node.getFunctionName()));
+            node.getParameterTypes().map(Formatter::formatTypeList).ifPresent(builder::append);
+
+            return null;
+        }
+
+        @Override
+        protected Void visitReturn(Return node, Integer indent)
+        {
+            append(indent, "RETURN ");
+            builder.append(formatExpression(node.getExpression(), parameters));
+
+            return null;
+        }
+
+        @Override
+        protected Void visitExternalBodyReference(ExternalBodyReference node, Integer indent)
+        {
+            append(indent, "EXTERNAL");
+            if (node.getIdentifier().isPresent()) {
+                builder.append(" NAME ");
+                builder.append(node.getIdentifier().get().toString());
+            }
 
             return null;
         }
@@ -665,6 +742,16 @@ public final class SqlFormatter
         }
 
         @Override
+        protected Void visitShowCreateFunction(ShowCreateFunction node, Integer context)
+        {
+            builder.append("SHOW CREATE FUNCTION ")
+                    .append(formatName(node.getName()));
+            node.getParameterTypes().map(Formatter::formatTypeList).ifPresent(builder::append);
+
+            return null;
+        }
+
+        @Override
         protected Void visitShowColumns(ShowColumns node, Integer context)
         {
             builder.append("SHOW COLUMNS FROM ")
@@ -686,6 +773,14 @@ public final class SqlFormatter
         protected Void visitShowFunctions(ShowFunctions node, Integer context)
         {
             builder.append("SHOW FUNCTIONS");
+
+            node.getLikePattern().ifPresent(value ->
+                    builder.append(" LIKE ")
+                            .append(formatStringLiteral(value)));
+
+            node.getEscape().ifPresent(value ->
+                    builder.append(" ESCAPE ")
+                            .append(formatStringLiteral(value)));
 
             return null;
         }
@@ -853,6 +948,47 @@ public final class SqlFormatter
             return " WITH ( " + propertyList + " )";
         }
 
+        private String formatSqlParameterDeclarations(List<SqlParameterDeclaration> parameters)
+        {
+            if (parameters.isEmpty()) {
+                return "()";
+            }
+            return parameters.stream()
+                    .map(parameter -> format(
+                            "%s%s %s",
+                            INDENT,
+                            formatExpression(parameter.getName(), this.parameters),
+                            parameter.getType()))
+                    .collect(joining(",\n", "(\n", "\n)"));
+        }
+
+        private static String formatTypeList(List<String> types)
+        {
+            return format("(%s)", Joiner.on(", ").join(types));
+        }
+
+        private String formatRoutineCharacteristics(RoutineCharacteristics characteristics)
+        {
+            return Joiner.on("\n").join(ImmutableList.of(
+                    "LANGUAGE " + characteristics.getLanguage(),
+                    formatRoutineCharacteristicName(characteristics.getDeterminism()),
+                    formatRoutineCharacteristicName(characteristics.getNullCallClause())));
+        }
+
+        private String formatAlterRoutineCharacteristics(AlterRoutineCharacteristics characteristics)
+        {
+            StringBuilder formatted = new StringBuilder();
+            if (characteristics.getNullCallClause().isPresent()) {
+                formatted.append(formatRoutineCharacteristicName(characteristics.getNullCallClause().get()));
+            }
+            return formatted.toString();
+        }
+
+        private String formatRoutineCharacteristicName(Enum characteristic)
+        {
+            return characteristic.name().replace("_", " ");
+        }
+
         private static String formatName(String name)
         {
             if (NAME_PATTERN.matcher(name).matches()) {
@@ -925,8 +1061,11 @@ public final class SqlFormatter
         @Override
         protected Void visitRenameTable(RenameTable node, Integer context)
         {
-            builder.append("ALTER TABLE ")
-                    .append(node.getSource())
+            builder.append("ALTER TABLE ");
+            if (node.isExists()) {
+                builder.append("IF EXISTS ");
+            }
+            builder.append(node.getSource())
                     .append(" RENAME TO ")
                     .append(node.getTarget());
 
@@ -936,10 +1075,16 @@ public final class SqlFormatter
         @Override
         protected Void visitRenameColumn(RenameColumn node, Integer context)
         {
-            builder.append("ALTER TABLE ")
-                    .append(node.getTable())
-                    .append(" RENAME COLUMN ")
-                    .append(node.getSource())
+            builder.append("ALTER TABLE ");
+            if (node.isTableExists()) {
+                builder.append("IF EXISTS ");
+            }
+            builder.append(node.getTable())
+                    .append(" RENAME COLUMN ");
+            if (node.isColumnExists()) {
+                builder.append("IF EXISTS ");
+            }
+            builder.append(node.getSource())
                     .append(" TO ")
                     .append(node.getTarget());
 
@@ -949,10 +1094,16 @@ public final class SqlFormatter
         @Override
         protected Void visitDropColumn(DropColumn node, Integer context)
         {
-            builder.append("ALTER TABLE ")
-                    .append(formatName(node.getTable()))
-                    .append(" DROP COLUMN ")
-                    .append(formatExpression(node.getColumn(), parameters));
+            builder.append("ALTER TABLE ");
+            if (node.isTableExists()) {
+                builder.append("IF EXISTS ");
+            }
+            builder.append(formatName(node.getTable()))
+                    .append(" DROP COLUMN ");
+            if (node.isColumnExists()) {
+                builder.append("IF EXISTS ");
+            }
+            builder.append(formatExpression(node.getColumn(), parameters));
 
             return null;
         }
@@ -969,10 +1120,16 @@ public final class SqlFormatter
         @Override
         protected Void visitAddColumn(AddColumn node, Integer indent)
         {
-            builder.append("ALTER TABLE ")
-                    .append(node.getName())
-                    .append(" ADD COLUMN ")
-                    .append(formatColumnDefinition(node.getColumn()));
+            builder.append("ALTER TABLE ");
+            if (node.isTableExists()) {
+                builder.append("IF EXISTS ");
+            }
+            builder.append(node.getName())
+                    .append(" ADD COLUMN ");
+            if (node.isColumnNotExists()) {
+                builder.append("IF NOT EXISTS ");
+            }
+            builder.append(formatColumnDefinition(node.getColumn()));
 
             return null;
         }
@@ -1283,14 +1440,6 @@ public final class SqlFormatter
                         .append(node.getCatalog().get());
             }
 
-            return null;
-        }
-
-        @Override
-        public Void visitSetPath(SetPath node, Integer indent)
-        {
-            builder.append("SET PATH ");
-            builder.append(Joiner.on(", ").join(node.getPathSpecification().getPath()));
             return null;
         }
 

@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.util;
 
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.type.Type;
 import it.unimi.dsi.fastutil.Hash;
 import it.unimi.dsi.fastutil.booleans.BooleanOpenHashSet;
 import it.unimi.dsi.fastutil.doubles.DoubleHash;
@@ -29,9 +29,9 @@ import java.lang.invoke.MethodType;
 import java.util.Collection;
 import java.util.Set;
 
+import static com.facebook.presto.common.function.OperatorType.EQUAL;
+import static com.facebook.presto.common.function.OperatorType.HASH_CODE;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static com.facebook.presto.spi.function.OperatorType.EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.HASH_CODE;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Verify.verify;
@@ -94,8 +94,8 @@ public final class FastutilSetHelper
 
         private LongStrategy(FunctionManager functionManager, Type type)
         {
-            hashCodeHandle = functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(HASH_CODE, fromTypes(type))).getMethodHandle();
-            equalsHandle = functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(EQUAL, fromTypes(type, type))).getMethodHandle();
+            hashCodeHandle = functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(HASH_CODE, fromTypes(type))).getMethodHandle();
+            equalsHandle = functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(EQUAL, fromTypes(type, type))).getMethodHandle();
         }
 
         @Override
@@ -136,8 +136,8 @@ public final class FastutilSetHelper
 
         private DoubleStrategy(FunctionManager functionManager, Type type)
         {
-            hashCodeHandle = functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(HASH_CODE, fromTypes(type))).getMethodHandle();
-            equalsHandle = functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(EQUAL, fromTypes(type, type))).getMethodHandle();
+            hashCodeHandle = functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(HASH_CODE, fromTypes(type))).getMethodHandle();
+            equalsHandle = functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(EQUAL, fromTypes(type, type))).getMethodHandle();
         }
 
         @Override
@@ -178,10 +178,10 @@ public final class FastutilSetHelper
 
         private ObjectStrategy(FunctionManager functionManager, Type type)
         {
-            hashCodeHandle = functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(HASH_CODE, fromTypes(type)))
+            hashCodeHandle = functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(HASH_CODE, fromTypes(type)))
                     .getMethodHandle()
                     .asType(MethodType.methodType(long.class, Object.class));
-            equalsHandle = functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(EQUAL, fromTypes(type, type)))
+            equalsHandle = functionManager.getBuiltInScalarFunctionImplementation(functionManager.resolveOperator(EQUAL, fromTypes(type, type)))
                     .getMethodHandle()
                     .asType(MethodType.methodType(Boolean.class, Object.class, Object.class));
         }
@@ -204,8 +204,6 @@ public final class FastutilSetHelper
         {
             try {
                 Boolean result = (Boolean) equalsHandle.invokeExact(a, b);
-                // FastutilHashSet is not intended be used for indeterminate values lookup
-                verify(result != null, "result is null");
                 return TRUE.equals(result);
             }
             catch (Throwable t) {

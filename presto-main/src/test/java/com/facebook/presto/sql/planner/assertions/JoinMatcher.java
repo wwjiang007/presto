@@ -16,12 +16,12 @@ package com.facebook.presto.sql.planner.assertions;
 import com.facebook.presto.Session;
 import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode.DistributionType;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.tree.Expression;
-import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 import java.util.Optional;
@@ -42,13 +42,20 @@ final class JoinMatcher
     private final List<ExpectedValueProvider<JoinNode.EquiJoinClause>> equiCriteria;
     private final Optional<Expression> filter;
     private final Optional<DistributionType> distributionType;
+    private final Optional<DynamicFilterMatcher> dynamicFilter;
 
-    JoinMatcher(JoinNode.Type joinType, List<ExpectedValueProvider<JoinNode.EquiJoinClause>> equiCriteria, Optional<Expression> filter, Optional<DistributionType> distributionType)
+    JoinMatcher(
+            JoinNode.Type joinType,
+            List<ExpectedValueProvider<JoinNode.EquiJoinClause>> equiCriteria,
+            Optional<Expression> filter,
+            Optional<DistributionType> distributionType,
+            Optional<DynamicFilterMatcher> dynamicFilter)
     {
         this.joinType = requireNonNull(joinType, "joinType is null");
         this.equiCriteria = requireNonNull(equiCriteria, "equiCriteria is null");
         this.filter = requireNonNull(filter, "filter can not be null");
         this.distributionType = requireNonNull(distributionType, "distributionType is null");
+        this.dynamicFilter = requireNonNull(dynamicFilter, "dynamicFilter is null");
     }
 
     @Override
@@ -103,13 +110,22 @@ final class JoinMatcher
          * Have to use order-independent comparison; there are no guarantees what order
          * the equi criteria will have after planning and optimizing.
          */
-        Set<JoinNode.EquiJoinClause> actual = ImmutableSet.copyOf(joinNode.getCriteria());
-        Set<JoinNode.EquiJoinClause> expected =
+        Set<List<String>> actual = joinNode.getCriteria().stream().map(criteria -> ImmutableList.of(criteria.getLeft().getName(), criteria.getRight().getName())).collect(toImmutableSet());
+        Set<List<String>> expected =
                 equiCriteria.stream()
                         .map(maker -> maker.getExpectedValue(symbolAliases))
+                        .map(criteria -> ImmutableList.of(criteria.getLeft().getName(), criteria.getRight().getName()))
                         .collect(toImmutableSet());
 
-        return new MatchResult(expected.equals(actual));
+        if (!expected.equals(actual)) {
+            return NO_MATCH;
+        }
+
+        if (dynamicFilter.isPresent() && !dynamicFilter.get().match(joinNode, symbolAliases).isMatch()) {
+            return NO_MATCH;
+        }
+
+        return MatchResult.match();
     }
 
     @Override
@@ -121,6 +137,7 @@ final class JoinMatcher
                 .add("equiCriteria", equiCriteria)
                 .add("filter", filter.orElse(null))
                 .add("distributionType", distributionType)
+                .add("dynamicFilter", dynamicFilter.map(DynamicFilterMatcher::getJoinExpectedMappings))
                 .toString();
     }
 }

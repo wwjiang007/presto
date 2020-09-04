@@ -14,10 +14,10 @@
 package com.facebook.presto.sql.analyzer;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.security.AccessControl;
+import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.rewrite.StatementRewrite;
@@ -35,8 +35,10 @@ import java.util.Optional;
 
 import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.extractAggregateFunctions;
 import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.extractExpressions;
+import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.extractExternalFunctions;
 import static com.facebook.presto.sql.analyzer.ExpressionTreeUtils.extractWindowFunctions;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.CANNOT_HAVE_AGGREGATIONS_WINDOWS_OR_GROUPING;
+import static com.facebook.presto.sql.analyzer.SemanticErrorCode.NOT_SUPPORTED;
 import static java.util.Objects.requireNonNull;
 
 public class Analyzer
@@ -84,6 +86,7 @@ public class Analyzer
                         accessControlInfo.getAccessControl().checkCanSelectFromColumns(
                                 session.getRequiredTransactionId(),
                                 accessControlInfo.getIdentity(),
+                                session.getAccessControlContext(),
                                 tableName,
                                 columns)));
         return analysis;
@@ -104,6 +107,14 @@ public class Analyzer
 
         if (!found.isEmpty()) {
             throw new SemanticException(CANNOT_HAVE_AGGREGATIONS_WINDOWS_OR_GROUPING, predicate, "%s cannot contain aggregations, window functions or grouping operations: %s", clause, found);
+        }
+    }
+
+    static void verifyNoExternalFunctions(Map<NodeRef<FunctionCall>, FunctionHandle> functionHandles, FunctionManager functionManager, Expression predicate, String clause)
+    {
+        List<FunctionCall> externalFunctions = extractExternalFunctions(functionHandles, ImmutableList.of(predicate), functionManager);
+        if (!externalFunctions.isEmpty()) {
+            throw new SemanticException(NOT_SUPPORTED, predicate, "External functions in %s is not supported: %s", clause, externalFunctions);
         }
     }
 }

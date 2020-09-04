@@ -14,8 +14,8 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
 import com.facebook.presto.sql.gen.JoinFilterFunctionCompiler.JoinFilterFunctionFactory;
 import com.google.common.collect.ImmutableList;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
@@ -98,13 +98,13 @@ public class JoinHashSupplier
         // We need to create new JoinFilterFunction per each thread using it, since those functions
         // are not thread safe...
         Optional<JoinFilterFunction> filterFunction =
-                filterFunctionFactory.map(factory -> factory.create(session.toConnectorSession(), addresses, pages));
+                filterFunctionFactory.map(factory -> factory.create(session.getSqlFunctionProperties(), addresses, pages));
         return new JoinHash(
                 pagesHash,
                 filterFunction,
                 positionLinks.map(links -> {
                     List<JoinFilterFunction> searchFunctions = searchFunctionFactories.stream()
-                            .map(factory -> factory.create(session.toConnectorSession(), addresses, pages))
+                            .map(factory -> factory.create(session.getSqlFunctionProperties(), addresses, pages))
                             .collect(toImmutableList());
                     return links.create(searchFunctions);
                 }));

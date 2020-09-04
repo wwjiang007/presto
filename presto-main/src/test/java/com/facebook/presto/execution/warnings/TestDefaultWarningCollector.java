@@ -13,8 +13,11 @@
  */
 package com.facebook.presto.execution.warnings;
 
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.PrestoWarning;
+import com.facebook.presto.spi.StandardWarningCode;
 import com.facebook.presto.spi.WarningCode;
+import com.facebook.presto.spi.WarningCollector;
 import org.testng.annotations.Test;
 
 import static org.testng.Assert.assertEquals;
@@ -24,7 +27,7 @@ public class TestDefaultWarningCollector
     @Test
     public void testNoWarnings()
     {
-        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig().setMaxWarnings(0));
+        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig().setMaxWarnings(0), WarningHandlingLevel.NORMAL);
         warningCollector.add(new PrestoWarning(new WarningCode(1, "1"), "warning 1"));
         assertEquals(warningCollector.getWarnings().size(), 0);
     }
@@ -32,10 +35,33 @@ public class TestDefaultWarningCollector
     @Test
     public void testMaxWarnings()
     {
-        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig().setMaxWarnings(2));
+        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig().setMaxWarnings(2), WarningHandlingLevel.NORMAL);
         warningCollector.add(new PrestoWarning(new WarningCode(1, "1"), "warning 1"));
         warningCollector.add(new PrestoWarning(new WarningCode(2, "2"), "warning 2"));
         warningCollector.add(new PrestoWarning(new WarningCode(3, "3"), "warning 3"));
         assertEquals(warningCollector.getWarnings().size(), 2);
+    }
+
+    @Test
+    public void testWarningSuppress()
+    {
+        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig(), WarningHandlingLevel.SUPPRESS);
+        warningCollector.add(new PrestoWarning(new WarningCode(1, "1"), "warning 1"));
+        assertEquals(warningCollector.getWarnings().size(), 0);
+    }
+
+    @Test(expectedExceptions = {PrestoException.class})
+    public void testWarningAsErrorThrowsException()
+    {
+        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig(), WarningHandlingLevel.AS_ERROR);
+        warningCollector.add(new PrestoWarning(new WarningCode(1, "1"), "warning 1"));
+    }
+
+    @Test
+    public void testWarningAsErrorNoExceptionWhenAddingParserWarning()
+    {
+        WarningCollector warningCollector = new DefaultWarningCollector(new WarningCollectorConfig(), WarningHandlingLevel.AS_ERROR);
+        warningCollector.add(new PrestoWarning(StandardWarningCode.PARSER_WARNING, "1"));
+        assertEquals(warningCollector.getWarnings().size(), 1);
     }
 }

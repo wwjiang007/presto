@@ -14,15 +14,24 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.metadata.FunctionManager;
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.SymbolsExtractor;
-import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.spi.plan.AggregationNode;
+import com.facebook.presto.spi.relation.CallExpression;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
+import com.facebook.presto.sql.planner.TypeProvider;
+import com.facebook.presto.sql.planner.VariablesExtractor;
 import com.facebook.presto.sql.relational.FunctionResolution;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.castToExpression;
+import static com.facebook.presto.sql.relational.OriginalExpressionUtils.isExpression;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 
 public class AggregationNodeUtils
 {
@@ -31,20 +40,33 @@ public class AggregationNodeUtils
     public static AggregationNode.Aggregation count(FunctionManager functionManager)
     {
         return new AggregationNode.Aggregation(
-                new FunctionResolution(functionManager).countFunction(),
-                ImmutableList.of(),
+                new CallExpression("count",
+                        new FunctionResolution(functionManager).countFunction(),
+                        BIGINT,
+                        ImmutableList.of()),
                 Optional.empty(),
                 Optional.empty(),
                 false,
                 Optional.empty());
     }
 
-    public static Set<Symbol> extractUnique(AggregationNode.Aggregation aggregation)
+    public static Set<VariableReferenceExpression> extractAggregationUniqueVariables(AggregationNode.Aggregation aggregation, TypeProvider types)
     {
-        ImmutableSet.Builder<Symbol> builder = ImmutableSet.builder();
-        aggregation.getArguments().forEach(argument -> builder.addAll(SymbolsExtractor.extractAll(argument)));
-        aggregation.getFilter().ifPresent(filter -> builder.addAll(SymbolsExtractor.extractAll(filter)));
-        aggregation.getOrderBy().ifPresent(orderingScheme -> builder.addAll(orderingScheme.getOrderBy()));
+        // types will be no longer needed once everything is RowExpression.
+        ImmutableSet.Builder<VariableReferenceExpression> builder = ImmutableSet.builder();
+        aggregation.getArguments().forEach(argument -> builder.addAll(extractAll(argument, types)));
+        aggregation.getFilter().ifPresent(filter -> builder.addAll(extractAll(filter, types)));
+        aggregation.getOrderBy().ifPresent(orderingScheme -> builder.addAll(orderingScheme.getOrderByVariables()));
         return builder.build();
+    }
+
+    private static List<VariableReferenceExpression> extractAll(RowExpression expression, TypeProvider types)
+    {
+        if (isExpression(expression)) {
+            return VariablesExtractor.extractAll(castToExpression(expression), types);
+        }
+        return VariablesExtractor.extractAll(expression)
+                .stream()
+                .collect(toImmutableList());
     }
 }

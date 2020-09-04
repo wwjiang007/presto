@@ -13,13 +13,10 @@
  */
 package com.facebook.presto.verifier.framework;
 
-import com.facebook.presto.sql.tree.QualifiedName;
+import com.facebook.airlift.configuration.Config;
+import com.facebook.airlift.configuration.ConfigDescription;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.configuration.Config;
-import io.airlift.configuration.ConfigDescription;
-import io.airlift.units.Duration;
-import io.airlift.units.MinDuration;
 
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
@@ -28,34 +25,9 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.verifier.source.MySqlSourceQuerySupplier.MYSQL_SOURCE_QUERY_SUPPLIER;
-import static java.util.concurrent.TimeUnit.MINUTES;
 
 public class VerifierConfig
 {
-    private Optional<String> additionalJdbcDriverPath = Optional.empty();
-    private Optional<String> controlJdbcDriverClass = Optional.empty();
-    private Optional<String> testJdbcDriverClass = Optional.empty();
-
-    private String controlJdbcUrl;
-    private String testJdbcUrl;
-
-    private Duration controlTimeout = new Duration(10, MINUTES);
-    private Duration testTimeout = new Duration(30, MINUTES);
-    private Duration metadataTimeout = new Duration(3, MINUTES);
-    private Duration checksumTimeout = new Duration(20, MINUTES);
-
-    private QualifiedName controlTablePrefix = QualifiedName.of("tmp_verifier_control");
-    private QualifiedName testTablePrefix = QualifiedName.of("tmp_verifier_test");
-
-    private Optional<String> controlCatalogOverride = Optional.empty();
-    private Optional<String> controlSchemaOverride = Optional.empty();
-    private Optional<String> controlUsernameOverride = Optional.empty();
-    private Optional<String> controlPasswordOverride = Optional.empty();
-    private Optional<String> testCatalogOverride = Optional.empty();
-    private Optional<String> testSchemaOverride = Optional.empty();
-    private Optional<String> testUsernameOverride = Optional.empty();
-    private Optional<String> testPasswordOverride = Optional.empty();
-
     private Optional<Set<String>> whitelist = Optional.empty();
     private Optional<Set<String>> blacklist = Optional.empty();
 
@@ -66,278 +38,19 @@ public class VerifierConfig
     private Optional<String> humanReadableEventLogFile = Optional.empty();
 
     private String testId;
+    private Optional<String> testName = Optional.empty();
     private int maxConcurrency = 10;
     private int suiteRepetitions = 1;
     private int queryRepetitions = 1;
 
     private double relativeErrorMargin = 1e-4;
     private double absoluteErrorMargin = 1e-12;
-    private boolean runTearDownOnResultMismatch;
-    private boolean failureResolverEnabled = true;
+    private boolean smartTeardown;
+    private int verificationResubmissionLimit = 2;
 
-    @NotNull
-    public Optional<String> getAdditionalJdbcDriverPath()
-    {
-        return additionalJdbcDriverPath;
-    }
-
-    @ConfigDescription("Path for test jdbc driver")
-    @Config("additional-jdbc-driver-path")
-    public VerifierConfig setAdditionalJdbcDriverPath(String additionalJdbcDriverPath)
-    {
-        this.additionalJdbcDriverPath = Optional.ofNullable(additionalJdbcDriverPath);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getControlJdbcDriverClass()
-    {
-        return controlJdbcDriverClass;
-    }
-
-    @ConfigDescription("Fully qualified control JDBC driver name")
-    @Config("control.jdbc-driver-class")
-    public VerifierConfig setControlJdbcDriverClass(String controlJdbcDriverClass)
-    {
-        this.controlJdbcDriverClass = Optional.ofNullable(controlJdbcDriverClass);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getTestJdbcDriverClass()
-    {
-        return testJdbcDriverClass;
-    }
-
-    @ConfigDescription("Fully qualified test JDBC driver name")
-    @Config("test.jdbc-driver-class")
-    public VerifierConfig setTestJdbcDriverClass(String testJdbcDriverClass)
-    {
-        this.testJdbcDriverClass = Optional.ofNullable(testJdbcDriverClass);
-        return this;
-    }
-
-    @NotNull
-    public String getControlJdbcUrl()
-    {
-        return controlJdbcUrl;
-    }
-
-    @ConfigDescription("URL for the control cluster")
-    @Config("control.jdbc-url")
-    public VerifierConfig setControlJdbcUrl(String controlJdbcUrl)
-    {
-        this.controlJdbcUrl = controlJdbcUrl;
-        return this;
-    }
-
-    @NotNull
-    public String getTestJdbcUrl()
-    {
-        return testJdbcUrl;
-    }
-
-    @ConfigDescription("URL for the test cluster")
-    @Config("test.jdbc-url")
-    public VerifierConfig setTestJdbcUrl(String testJdbcUrl)
-    {
-        this.testJdbcUrl = testJdbcUrl;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getControlTimeout()
-    {
-        return controlTimeout;
-    }
-
-    @ConfigDescription("Timeout for queries to the control cluster")
-    @Config("control.timeout")
-    public VerifierConfig setControlTimeout(Duration controlTimeout)
-    {
-        this.controlTimeout = controlTimeout;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getTestTimeout()
-    {
-        return testTimeout;
-    }
-
-    @ConfigDescription("Timeout for queries to the test cluster")
-    @Config("test.timeout")
-    public VerifierConfig setTestTimeout(Duration testTimeout)
-    {
-        this.testTimeout = testTimeout;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getMetadataTimeout()
-    {
-        return metadataTimeout;
-    }
-
-    @Config("metadata.timeout")
-    public VerifierConfig setMetadataTimeout(Duration metadataTimeout)
-    {
-        this.metadataTimeout = metadataTimeout;
-        return this;
-    }
-
-    @MinDuration("1s")
-    public Duration getChecksumTimeout()
-    {
-        return checksumTimeout;
-    }
-
-    @Config("checksum.timeout")
-    public VerifierConfig setChecksumTimeout(Duration checksumTimeout)
-    {
-        this.checksumTimeout = checksumTimeout;
-        return this;
-    }
-
-    @NotNull
-    public QualifiedName getControlTablePrefix()
-    {
-        return controlTablePrefix;
-    }
-
-    @ConfigDescription("The prefix to use for temporary control shadow tables. May be fully qualified like 'tmp_catalog.tmp_schema.tmp_'")
-    @Config("control.table-prefix")
-    public VerifierConfig setControlTablePrefix(String controlTablePrefix)
-    {
-        this.controlTablePrefix = controlTablePrefix == null ?
-                null :
-                QualifiedName.of(Splitter.on(".").splitToList(controlTablePrefix));
-        return this;
-    }
-
-    @NotNull
-    public QualifiedName getTestTablePrefix()
-    {
-        return testTablePrefix;
-    }
-
-    @ConfigDescription("The prefix to use for temporary test shadow tables. May be fully qualified like 'tmp_catalog.tmp_schema.tmp_'")
-    @Config("test.table-prefix")
-    public VerifierConfig setTestTablePrefix(String testTablePrefix)
-    {
-        this.testTablePrefix = testTablePrefix == null ?
-                null :
-                QualifiedName.of(Splitter.on(".").splitToList(testTablePrefix));
-        return this;
-    }
-
-    public Optional<String> getControlCatalogOverride()
-    {
-        return controlCatalogOverride;
-    }
-
-    @ConfigDescription("Overrides the control_catalog field in all queries in the suites")
-    @Config("control.catalog-override")
-    public VerifierConfig setControlCatalogOverride(String controlCatalogOverride)
-    {
-        this.controlCatalogOverride = Optional.ofNullable(controlCatalogOverride);
-        return this;
-    }
-
-    public Optional<String> getControlSchemaOverride()
-    {
-        return controlSchemaOverride;
-    }
-
-    @ConfigDescription("Overrides the control_schema field in all queries in the suites")
-    @Config("control.schema-override")
-    public VerifierConfig setControlSchemaOverride(String controlSchemaOverride)
-    {
-        this.controlSchemaOverride = Optional.ofNullable(controlSchemaOverride);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getControlUsernameOverride()
-    {
-        return controlUsernameOverride;
-    }
-
-    @ConfigDescription("Username for control cluster")
-    @Config("control.username-override")
-    public VerifierConfig setControlUsernameOverride(String controlUsernameOverride)
-    {
-        this.controlUsernameOverride = Optional.ofNullable(controlUsernameOverride);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getControlPasswordOverride()
-    {
-        return controlPasswordOverride;
-    }
-
-    @ConfigDescription("Password for control cluster")
-    @Config("control.password-override")
-    public VerifierConfig setControlPasswordOverride(String controlPasswordOverride)
-    {
-        this.controlPasswordOverride = Optional.ofNullable(controlPasswordOverride);
-        return this;
-    }
-
-    public Optional<String> getTestCatalogOverride()
-    {
-        return testCatalogOverride;
-    }
-
-    @ConfigDescription("Overrides the test_catalog field in all queries in the suites")
-    @Config("test.catalog-override")
-    public VerifierConfig setTestCatalogOverride(String testCatalogOverride)
-    {
-        this.testCatalogOverride = Optional.ofNullable(testCatalogOverride);
-        return this;
-    }
-
-    public Optional<String> getTestSchemaOverride()
-    {
-        return testSchemaOverride;
-    }
-
-    @ConfigDescription("Overrides the test_schema field in all queries in the suites")
-    @Config("test.schema-override")
-    public VerifierConfig setTestSchemaOverride(String testSchemaOverride)
-    {
-        this.testSchemaOverride = Optional.ofNullable(testSchemaOverride);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getTestUsernameOverride()
-    {
-        return testUsernameOverride;
-    }
-
-    @ConfigDescription("Username for test cluster")
-    @Config("test.username-override")
-    public VerifierConfig setTestUsernameOverride(String testUsernameOverride)
-    {
-        this.testUsernameOverride = Optional.ofNullable(testUsernameOverride);
-        return this;
-    }
-
-    @NotNull
-    public Optional<String> getTestPasswordOverride()
-    {
-        return testPasswordOverride;
-    }
-
-    @ConfigDescription("Password for test cluster")
-    @Config("test.password-override")
-    public VerifierConfig setTestPasswordOverride(String testPasswordOverride)
-    {
-        this.testPasswordOverride = Optional.ofNullable(testPasswordOverride);
-        return this;
-    }
+    private boolean setupOnMainClusters = true;
+    private boolean teardownOnMainClusters = true;
+    private boolean skipControl;
 
     @NotNull
     public Optional<Set<String>> getWhitelist()
@@ -433,11 +146,25 @@ public class VerifierConfig
         return testId;
     }
 
-    @ConfigDescription("A customizable string that will be logged with the results")
+    @ConfigDescription("A customizable string that will be passed into query client info and logged with the results")
     @Config("test-id")
     public VerifierConfig setTestId(String testId)
     {
         this.testId = testId;
+        return this;
+    }
+
+    @NotNull
+    public Optional<String> getTestName()
+    {
+        return testName;
+    }
+
+    @ConfigDescription("A customizable string that will be passed into query client info")
+    @Config("test-name")
+    public VerifierConfig setTestName(String testName)
+    {
+        this.testName = Optional.ofNullable(testName);
         return this;
     }
 
@@ -510,28 +237,69 @@ public class VerifierConfig
         return this;
     }
 
-    public boolean isRunTearDownOnResultMismatch()
+    public boolean isSmartTeardown()
     {
-        return runTearDownOnResultMismatch;
+        return smartTeardown;
     }
 
-    @ConfigDescription("When set to false, temporary tables are not dropped in case of checksum failure")
-    @Config("run-teardown-on-result-mismatch")
-    public VerifierConfig setRunTearDownOnResultMismatch(boolean runTearDownOnResultMismatch)
+    @ConfigDescription("When set to false, temporary tables are not dropped if verification fails and both control and test query succeeds")
+    @Config("smart-teardown")
+    public VerifierConfig setSmartTeardown(boolean smartTeardown)
     {
-        this.runTearDownOnResultMismatch = runTearDownOnResultMismatch;
+        this.smartTeardown = smartTeardown;
         return this;
     }
 
-    public boolean isFailureResolverEnabled()
+    @Min(0)
+    public int getVerificationResubmissionLimit()
     {
-        return failureResolverEnabled;
+        return verificationResubmissionLimit;
     }
 
-    @Config("failure-resolver.enabled")
-    public VerifierConfig setFailureResolverEnabled(boolean failureResolverEnabled)
+    @ConfigDescription("Maximum number of time a transiently failed verification can be resubmitted")
+    @Config("verification-resubmission.limit")
+    public VerifierConfig setVerificationResubmissionLimit(int verificationResubmissionLimit)
     {
-        this.failureResolverEnabled = failureResolverEnabled;
+        this.verificationResubmissionLimit = verificationResubmissionLimit;
+        return this;
+    }
+
+    public boolean isSetupOnMainClusters()
+    {
+        return setupOnMainClusters;
+    }
+
+    @ConfigDescription("If true, run control/test setup queries on control/test clusters. Otherwise, run setup queries on the help cluster.")
+    @Config("setup-on-main-clusters")
+    public VerifierConfig setSetupOnMainClusters(boolean setupOnMainClusters)
+    {
+        this.setupOnMainClusters = setupOnMainClusters;
+        return this;
+    }
+
+    public boolean isTeardownOnMainClusters()
+    {
+        return teardownOnMainClusters;
+    }
+
+    @ConfigDescription("If true, run control/test teardown queries on control/test clusters. Otherwise, run teardown queries on the help cluster.")
+    @Config("teardown-on-main-clusters")
+    public VerifierConfig setTeardownOnMainClusters(boolean teardownOnMainClusters)
+    {
+        this.teardownOnMainClusters = teardownOnMainClusters;
+        return this;
+    }
+
+    public boolean isSkipControl()
+    {
+        return skipControl;
+    }
+
+    @ConfigDescription("Skip control queries and result comparison, only run test queries.")
+    @Config("skip-control")
+    public VerifierConfig setSkipControl(boolean skipControl)
+    {
+        this.skipControl = skipControl;
         return this;
     }
 }

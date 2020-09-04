@@ -13,6 +13,12 @@
  */
 package com.facebook.presto.tpch;
 
+import com.facebook.presto.common.block.SortOrder;
+import com.facebook.presto.common.predicate.Domain;
+import com.facebook.presto.common.predicate.NullableValue;
+import com.facebook.presto.common.predicate.TupleDomain;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorSession;
@@ -27,19 +33,13 @@ import com.facebook.presto.spi.LocalProperty;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
 import com.facebook.presto.spi.SortingProperty;
-import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
-import com.facebook.presto.spi.predicate.Domain;
-import com.facebook.presto.spi.predicate.NullableValue;
-import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.statistics.ColumnStatistics;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.DoubleRange;
 import com.facebook.presto.spi.statistics.Estimate;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.tpch.statistics.ColumnStatisticsData;
 import com.facebook.presto.tpch.statistics.StatisticsEstimator;
 import com.facebook.presto.tpch.statistics.TableStatisticsData;
@@ -68,16 +68,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.VarcharType.createVarcharType;
 import static com.facebook.presto.spi.statistics.TableStatisticType.ROW_COUNT;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static com.facebook.presto.tpch.util.PredicateUtils.convertToPredicate;
 import static com.facebook.presto.tpch.util.PredicateUtils.filterOutColumnFromPredicate;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Maps.asMap;
 import static io.airlift.tpch.OrderColumn.ORDER_STATUS;
@@ -320,7 +322,7 @@ public class TpchMetadata
     }
 
     @Override
-    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint<ColumnHandle> constraint)
+    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Optional<ConnectorTableLayoutHandle> tableLayoutHandle, List<ColumnHandle> columnHandles, Constraint<ColumnHandle> constraint)
     {
         TpchTableHandle tpchTableHandle = (TpchTableHandle) tableHandle;
         String tableName = tpchTableHandle.getTableName();
@@ -331,7 +333,6 @@ public class TpchMetadata
         }
         Optional<TableStatisticsData> optionalTableStatisticsData = statisticsEstimator.estimateStats(tpchTable, columnValuesRestrictions, tpchTableHandle.getScaleFactor());
 
-        Map<String, ColumnHandle> columnHandles = getColumnHandles(session, tpchTableHandle);
         return optionalTableStatisticsData
                 .map(tableStatisticsData -> toTableStatistics(optionalTableStatisticsData.get(), tpchTableHandle, columnHandles))
                 .orElse(TableStatistics.empty());
@@ -370,21 +371,23 @@ public class TpchMetadata
         }
     }
 
-    private TableStatistics toTableStatistics(TableStatisticsData tableStatisticsData, TpchTableHandle tpchTableHandle, Map<String, ColumnHandle> columnHandles)
+    private TableStatistics toTableStatistics(TableStatisticsData tableStatisticsData, TpchTableHandle tpchTableHandle, List<ColumnHandle> columnHandles)
     {
+        TpchTable<?> table = TpchTable.getTable(tpchTableHandle.getTableName());
+
+        Map<String, TpchColumnHandle> columnHandleByName = columnHandles.stream()
+                .map(TpchColumnHandle.class::cast)
+                .collect(toImmutableMap(TpchColumnHandle::getColumnName, Function.identity()));
+
         TableStatistics.Builder builder = TableStatistics.builder()
                 .setRowCount(Estimate.of(tableStatisticsData.getRowCount()));
         tableStatisticsData.getColumns().forEach((columnName, stats) -> {
-            TpchColumnHandle columnHandle = (TpchColumnHandle) getColumnHandle(tpchTableHandle, columnHandles, columnName);
-            builder.setColumnStatistics(columnHandle, toColumnStatistics(stats, columnHandle.getType()));
+            TpchColumnHandle columnHandle = columnHandleByName.get(columnNaming.getName(table.getColumn(columnName)));
+            if (columnHandle != null) {
+                builder.setColumnStatistics(columnHandle, toColumnStatistics(stats, columnHandle.getType()));
+            }
         });
         return builder.build();
-    }
-
-    private ColumnHandle getColumnHandle(TpchTableHandle tpchTableHandle, Map<String, ColumnHandle> columnHandles, String columnName)
-    {
-        TpchTable<?> table = TpchTable.getTable(tpchTableHandle.getTableName());
-        return columnHandles.get(columnNaming.getName(table.getColumn(columnName)));
     }
 
     private ColumnStatistics toColumnStatistics(ColumnStatisticsData stats, Type columnType)

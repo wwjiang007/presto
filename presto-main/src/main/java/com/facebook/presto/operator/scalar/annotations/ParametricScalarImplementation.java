@@ -13,18 +13,22 @@
  */
 package com.facebook.presto.operator.scalar.annotations;
 
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.FunctionType;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
+import com.facebook.presto.common.type.TypeSignature;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.operator.ParametricImplementation;
 import com.facebook.presto.operator.annotations.FunctionsParserHelper;
 import com.facebook.presto.operator.annotations.ImplementationDependency;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ReturnPlaceConvention;
-import com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ScalarImplementationChoice;
-import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ReturnPlaceConvention;
+import com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ScalarImplementationChoice;
 import com.facebook.presto.spi.function.BlockIndex;
 import com.facebook.presto.spi.function.BlockPosition;
 import com.facebook.presto.spi.function.IsNull;
@@ -33,10 +37,6 @@ import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.function.SqlNullable;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.function.TypeParameter;
-import com.facebook.presto.spi.type.FunctionType;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -59,6 +59,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.operator.ParametricFunctionHelpers.bindDependencies;
 import static com.facebook.presto.operator.annotations.FunctionsParserHelper.containsImplementationDependencyAnnotation;
 import static com.facebook.presto.operator.annotations.FunctionsParserHelper.containsLegacyNullable;
@@ -70,15 +71,14 @@ import static com.facebook.presto.operator.annotations.ImplementationDependency.
 import static com.facebook.presto.operator.annotations.ImplementationDependency.checkTypeParameters;
 import static com.facebook.presto.operator.annotations.ImplementationDependency.getImplementationDependencyAnnotation;
 import static com.facebook.presto.operator.annotations.ImplementationDependency.validateImplementationDependencyAnnotation;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.functionTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.BLOCK_AND_POSITION;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.functionTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.BLOCK_AND_POSITION;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
 import static com.facebook.presto.spi.StandardErrorCode.FUNCTION_IMPLEMENTATION_ERROR;
 import static com.facebook.presto.spi.function.FunctionKind.SCALAR;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static com.facebook.presto.util.Reflection.constructorMethodHandle;
 import static com.facebook.presto.util.Reflection.methodHandle;
@@ -118,7 +118,7 @@ public class ParametricScalarImplementation
         }
     }
 
-    public Optional<ScalarFunctionImplementation> specialize(Signature boundSignature, BoundVariables boundVariables, TypeManager typeManager, FunctionManager functionManager)
+    public Optional<BuiltInScalarFunctionImplementation> specialize(Signature boundSignature, BoundVariables boundVariables, TypeManager typeManager, FunctionManager functionManager)
     {
         List<ScalarImplementationChoice> implementationChoices = new ArrayList<>();
         for (Map.Entry<String, Class<?>> entry : specializedTypeParameters.entrySet()) {
@@ -169,7 +169,7 @@ public class ParametricScalarImplementation
                     boundMethodHandle.asType(javaMethodType(choice, boundSignature, typeManager)),
                     boundConstructor));
         }
-        return Optional.of(new ScalarFunctionImplementation(implementationChoices));
+        return Optional.of(new BuiltInScalarFunctionImplementation(implementationChoices));
     }
 
     @Override
@@ -224,8 +224,8 @@ public class ParametricScalarImplementation
         if (choice.getConstructor().isPresent()) {
             methodHandleParameterTypes.add(Object.class);
         }
-        if (choice.hasConnectorSession()) {
-            methodHandleParameterTypes.add(ConnectorSession.class);
+        if (choice.hasSqlFunctionProperties()) {
+            methodHandleParameterTypes.add(SqlFunctionProperties.class);
         }
 
         List<ArgumentProperty> argumentProperties = choice.getArgumentProperties();
@@ -313,11 +313,11 @@ public class ParametricScalarImplementation
         private final List<ImplementationDependency> dependencies;
         private final List<ImplementationDependency> constructorDependencies;
         private final int numberOfBlockPositionArguments;
-        private final boolean hasConnectorSession;
+        private final boolean hasSqlFunctionProperties;
 
         private ParametricScalarImplementationChoice(
                 boolean nullable,
-                boolean hasConnectorSession,
+                boolean hasSqlFunctionProperties,
                 List<ArgumentProperty> argumentProperties,
                 ReturnPlaceConvention returnPlaceConvention,
                 MethodHandle methodHandle,
@@ -326,7 +326,7 @@ public class ParametricScalarImplementation
                 List<ImplementationDependency> constructorDependencies)
         {
             this.nullable = nullable;
-            this.hasConnectorSession = hasConnectorSession;
+            this.hasSqlFunctionProperties = hasSqlFunctionProperties;
             this.argumentProperties = ImmutableList.copyOf(requireNonNull(argumentProperties, "argumentProperties is null"));
             this.returnPlaceConvention = requireNonNull(returnPlaceConvention, "returnPlaceConvention is null");
             this.methodHandle = requireNonNull(methodHandle, "methodHandle is null");
@@ -348,9 +348,9 @@ public class ParametricScalarImplementation
             return nullable;
         }
 
-        public boolean hasConnectorSession()
+        public boolean hasSqlFunctionProperties()
         {
-            return hasConnectorSession;
+            return hasSqlFunctionProperties;
         }
 
         public MethodHandle getMethodHandle()
@@ -465,7 +465,7 @@ public class ParametricScalarImplementation
         private final List<ImplementationDependency> constructorDependencies = new ArrayList<>();
         private final List<LongVariableConstraint> longVariableConstraints;
         private final Class<?> returnNativeContainerType;
-        private boolean hasConnectorSession;
+        private boolean hasSqlFunctionProperties;
 
         private final List<ParametricScalarImplementationChoice> choices = new ArrayList<>();
 
@@ -515,7 +515,7 @@ public class ParametricScalarImplementation
 
             ParametricScalarImplementationChoice choice = new ParametricScalarImplementationChoice(
                     nullable,
-                    hasConnectorSession,
+                    hasSqlFunctionProperties,
                     argumentProperties,
                     ReturnPlaceConvention.STACK, // TODO: support other return place convention
                     methodHandle,
@@ -534,9 +534,9 @@ public class ParametricScalarImplementation
                 Class<?> parameterType = parameter.getType();
 
                 // Skip injected parameters
-                if (parameterType == ConnectorSession.class) {
-                    checkCondition(!hasConnectorSession, FUNCTION_IMPLEMENTATION_ERROR, "Method [%s] has more than 1 ConnectorSession in the parameter list", method);
-                    hasConnectorSession = true;
+                if (parameterType == SqlFunctionProperties.class) {
+                    checkCondition(!hasSqlFunctionProperties, FUNCTION_IMPLEMENTATION_ERROR, "Method [%s] has more than 1 SqlFunctionProperties in the parameter list", method);
+                    hasSqlFunctionProperties = true;
                     i++;
                     continue;
                 }
@@ -635,7 +635,7 @@ public class ParametricScalarImplementation
                     .filter(nullConvention -> nullConvention != RETURN_NULL_ON_NULL)
                     .count();
             checkCondition((header.getHeader().isCalledOnNullInput() && valueArgumentsCalledOnNullCount > 0)
-                    || (!header.getHeader().isCalledOnNullInput() && valueArgumentsCalledOnNullCount == 0),
+                            || (!header.getHeader().isCalledOnNullInput() && valueArgumentsCalledOnNullCount == 0),
                     FUNCTION_IMPLEMENTATION_ERROR,
                     header.getHeader().isCalledOnNullInput() ?
                             format("Method [%s] is annotated as called on null input but no argument handles null", method) :

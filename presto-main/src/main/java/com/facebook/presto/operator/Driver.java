@@ -13,13 +13,14 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.Page;
 import com.facebook.presto.execution.ScheduledSplit;
 import com.facebook.presto.execution.TaskSource;
 import com.facebook.presto.metadata.Split;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.UpdatablePageSource;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
@@ -27,7 +28,6 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
-import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 
 import javax.annotation.concurrent.GuardedBy;
@@ -44,13 +44,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
+import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
 import static com.facebook.presto.operator.Operator.NOT_BLOCKED;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
+import static com.facebook.presto.util.MoreUninterruptibles.tryLockUninterruptibly;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static java.lang.Boolean.TRUE;
 import static java.util.Objects.requireNonNull;
 
@@ -317,7 +318,9 @@ public class Driver
     {
         return new OperationTimer(
                 driverContext.isCpuTimerEnabled(),
-                driverContext.isCpuTimerEnabled() && driverContext.isPerOperatorCpuTimerEnabled());
+                driverContext.isCpuTimerEnabled() && driverContext.isPerOperatorCpuTimerEnabled(),
+                driverContext.isAllocationTrackingEnabled(),
+                driverContext.isAllocationTrackingEnabled() && driverContext.isPerOperatorAllocationTrackingEnabled());
     }
 
     private ListenableFuture<?> updateDriverBlockedFuture(ListenableFuture<?> sourceBlockedFuture)
@@ -658,13 +661,7 @@ public class Driver
     {
         checkLockNotHeld("Lock can not be reacquired");
 
-        boolean acquired = false;
-        try {
-            acquired = exclusiveLock.tryLock(timeout, unit);
-        }
-        catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        boolean acquired = exclusiveLock.tryLock(timeout, unit);
 
         if (!acquired) {
             return Optional.empty();
@@ -737,10 +734,9 @@ public class Driver
         }
 
         public boolean tryLock(long timeout, TimeUnit unit)
-                throws InterruptedException
         {
             checkState(!lock.isHeldByCurrentThread(), "Lock is not reentrant");
-            boolean acquired = lock.tryLock(timeout, unit);
+            boolean acquired = tryLockUninterruptibly(lock, timeout, unit);
             if (acquired) {
                 setOwner();
             }

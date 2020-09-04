@@ -13,12 +13,13 @@
  */
 package com.facebook.presto.sql.relational;
 
+import com.facebook.presto.common.function.OperatorType;
+import com.facebook.presto.common.function.QualifiedFunctionName;
+import com.facebook.presto.common.type.CharType;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.function.FunctionHandle;
-import com.facebook.presto.spi.function.OperatorType;
 import com.facebook.presto.spi.function.StandardFunctionResolution;
-import com.facebook.presto.spi.type.CharType;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.google.common.collect.ImmutableList;
@@ -26,24 +27,24 @@ import com.google.common.collect.ImmutableList;
 import java.util.List;
 import java.util.Optional;
 
-import static com.facebook.presto.metadata.OperatorSignatureUtils.mangleOperatorName;
-import static com.facebook.presto.spi.function.OperatorType.ADD;
-import static com.facebook.presto.spi.function.OperatorType.BETWEEN;
-import static com.facebook.presto.spi.function.OperatorType.DIVIDE;
-import static com.facebook.presto.spi.function.OperatorType.EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN;
-import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN_OR_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.IS_DISTINCT_FROM;
-import static com.facebook.presto.spi.function.OperatorType.LESS_THAN;
-import static com.facebook.presto.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.MODULUS;
-import static com.facebook.presto.spi.function.OperatorType.MULTIPLY;
-import static com.facebook.presto.spi.function.OperatorType.NEGATION;
-import static com.facebook.presto.spi.function.OperatorType.NOT_EQUAL;
-import static com.facebook.presto.spi.function.OperatorType.SUBSCRIPT;
-import static com.facebook.presto.spi.function.OperatorType.SUBTRACT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.common.function.OperatorType.ADD;
+import static com.facebook.presto.common.function.OperatorType.BETWEEN;
+import static com.facebook.presto.common.function.OperatorType.DIVIDE;
+import static com.facebook.presto.common.function.OperatorType.EQUAL;
+import static com.facebook.presto.common.function.OperatorType.GREATER_THAN;
+import static com.facebook.presto.common.function.OperatorType.GREATER_THAN_OR_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.IS_DISTINCT_FROM;
+import static com.facebook.presto.common.function.OperatorType.LESS_THAN;
+import static com.facebook.presto.common.function.OperatorType.LESS_THAN_OR_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.MODULUS;
+import static com.facebook.presto.common.function.OperatorType.MULTIPLY;
+import static com.facebook.presto.common.function.OperatorType.NEGATION;
+import static com.facebook.presto.common.function.OperatorType.NOT_EQUAL;
+import static com.facebook.presto.common.function.OperatorType.SUBSCRIPT;
+import static com.facebook.presto.common.function.OperatorType.SUBTRACT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.tree.ArrayConstructor.ARRAY_CONSTRUCTOR;
 import static com.facebook.presto.type.LikePatternType.LIKE_PATTERN;
@@ -87,7 +88,7 @@ public final class FunctionResolution
 
     public boolean isLikeFunction(FunctionHandle functionHandle)
     {
-        return functionManager.getFunctionMetadata(functionHandle).getName().toUpperCase().equals("LIKE");
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals(QualifiedFunctionName.of(DEFAULT_NAMESPACE, "LIKE"));
     }
 
     public FunctionHandle likePatternFunction()
@@ -98,13 +99,23 @@ public final class FunctionResolution
     @Override
     public boolean isCastFunction(FunctionHandle functionHandle)
     {
-        return functionManager.getFunctionMetadata(functionHandle).getName().equals(mangleOperatorName(OperatorType.CAST.name()));
+        return functionManager.getFunctionMetadata(functionHandle).getOperatorType().equals(Optional.of(OperatorType.CAST));
+    }
+
+    public boolean isTryCastFunction(FunctionHandle functionHandle)
+    {
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals(QualifiedFunctionName.of(DEFAULT_NAMESPACE, "TRY_CAST"));
+    }
+
+    public boolean isArrayConstructor(FunctionHandle functionHandle)
+    {
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals(QualifiedFunctionName.of(DEFAULT_NAMESPACE, ARRAY_CONSTRUCTOR));
     }
 
     @Override
     public FunctionHandle betweenFunction(Type valueType, Type lowerBoundType, Type upperBoundType)
     {
-        return functionManager.lookupFunction(BETWEEN.getFunctionName(), fromTypes(valueType, lowerBoundType, upperBoundType));
+        return functionManager.lookupFunction(BETWEEN.getFunctionName().getFunctionName(), fromTypes(valueType, lowerBoundType, upperBoundType));
     }
 
     @Override
@@ -155,7 +166,7 @@ public final class FunctionResolution
     @Override
     public FunctionHandle negateFunction(Type type)
     {
-        return functionManager.lookupFunction(NEGATION.getFunctionName(), fromTypes(type));
+        return functionManager.lookupFunction(NEGATION.getFunctionName().getFunctionName(), fromTypes(type));
     }
 
     @Override
@@ -219,7 +230,7 @@ public final class FunctionResolution
     @Override
     public FunctionHandle subscriptFunction(Type baseType, Type indexType)
     {
-        return functionManager.lookupFunction(SUBSCRIPT.getFunctionName(), fromTypes(baseType, indexType));
+        return functionManager.lookupFunction(SUBSCRIPT.getFunctionName().getFunctionName(), fromTypes(baseType, indexType));
     }
 
     @Override
@@ -230,18 +241,23 @@ public final class FunctionResolution
 
     public FunctionHandle tryFunction(Type returnType)
     {
-        return functionManager.lookupFunction("TRY", fromTypes(returnType));
+        return functionManager.lookupFunction("$internal$try", fromTypes(returnType));
     }
 
     public boolean isTryFunction(FunctionHandle functionHandle)
     {
-        return functionManager.getFunctionMetadata(functionHandle).getName().equals("TRY");
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals("$internal$try");
+    }
+
+    public boolean isFailFunction(FunctionHandle functionHandle)
+    {
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals(QualifiedFunctionName.of(DEFAULT_NAMESPACE, "fail"));
     }
 
     @Override
     public boolean isCountFunction(FunctionHandle functionHandle)
     {
-        return functionManager.getFunctionMetadata(functionHandle).getName().equalsIgnoreCase("count");
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals(QualifiedFunctionName.of(DEFAULT_NAMESPACE, "count"));
     }
 
     @Override
@@ -259,7 +275,7 @@ public final class FunctionResolution
     @Override
     public boolean isMaxFunction(FunctionHandle functionHandle)
     {
-        return functionManager.getFunctionMetadata(functionHandle).getName().equalsIgnoreCase("max");
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals(QualifiedFunctionName.of(DEFAULT_NAMESPACE, "max"));
     }
 
     @Override
@@ -271,7 +287,7 @@ public final class FunctionResolution
     @Override
     public boolean isMinFunction(FunctionHandle functionHandle)
     {
-        return functionManager.getFunctionMetadata(functionHandle).getName().equalsIgnoreCase("min");
+        return functionManager.getFunctionMetadata(functionHandle).getName().equals(QualifiedFunctionName.of(DEFAULT_NAMESPACE, "min"));
     }
 
     @Override

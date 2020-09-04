@@ -14,18 +14,18 @@
 package com.facebook.presto.sql.planner.sanity;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.WarningCollector;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.plan.OutputNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 
 import static com.facebook.presto.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
 import static com.google.common.base.Preconditions.checkState;
 
 public final class VerifyOnlyOneOutputNode
-        implements PlanSanityChecker.Checker
+        implements PlanChecker.Checker
 {
     @Override
     public void validate(PlanNode plan, Session session, Metadata metadata, SqlParser sqlParser, TypeProvider types, WarningCollector warningCollector)

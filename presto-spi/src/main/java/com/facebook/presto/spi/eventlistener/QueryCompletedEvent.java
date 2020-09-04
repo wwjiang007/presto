@@ -31,6 +31,9 @@ public class QueryCompletedEvent
     private final Optional<QueryFailureInfo> failureInfo;
     private final List<PrestoWarning> warnings;
     private final Optional<QueryType> queryType;
+    private final List<String> failedTasks;
+    private final List<StageStatistics> stageStatistics;
+    private final List<OperatorStatistics> operatorStatistics;
 
     private final Instant createTime;
     private final Instant executionStartTime;
@@ -44,9 +47,12 @@ public class QueryCompletedEvent
             Optional<QueryFailureInfo> failureInfo,
             List<PrestoWarning> warnings,
             Optional<QueryType> queryType,
+            List<String> failedTasks,
             Instant createTime,
             Instant executionStartTime,
-            Instant endTime)
+            Instant endTime,
+            List<StageStatistics> stageStatistics,
+            List<OperatorStatistics> operatorStatistics)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.statistics = requireNonNull(statistics, "statistics is null");
@@ -55,9 +61,12 @@ public class QueryCompletedEvent
         this.failureInfo = requireNonNull(failureInfo, "failureInfo is null");
         this.warnings = requireNonNull(warnings, "queryWarnings is null");
         this.queryType = requireNonNull(queryType, "queryType is null");
+        this.failedTasks = requireNonNull(failedTasks, "failedTasks is null");
         this.createTime = requireNonNull(createTime, "createTime is null");
         this.executionStartTime = requireNonNull(executionStartTime, "executionStartTime is null");
         this.endTime = requireNonNull(endTime, "endTime is null");
+        this.stageStatistics = requireNonNull(stageStatistics, "stageStatistics is null");
+        this.operatorStatistics = requireNonNull(operatorStatistics, "operatorStatistics is null");
     }
 
     public QueryMetadata getMetadata()
@@ -95,6 +104,11 @@ public class QueryCompletedEvent
         return queryType;
     }
 
+    public List<String> getFailedTasks()
+    {
+        return failedTasks;
+    }
+
     public Instant getCreateTime()
     {
         return createTime;
@@ -108,5 +122,15 @@ public class QueryCompletedEvent
     public Instant getEndTime()
     {
         return endTime;
+    }
+
+    public List<StageStatistics> getStageStatistics()
+    {
+        return stageStatistics;
+    }
+
+    public List<OperatorStatistics> getOperatorStatistics()
+    {
+        return operatorStatistics;
     }
 }

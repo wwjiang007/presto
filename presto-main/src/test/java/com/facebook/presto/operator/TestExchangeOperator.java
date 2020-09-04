@@ -13,22 +13,23 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.airlift.http.client.HttpClient;
+import com.facebook.airlift.http.client.testing.TestingHttpClient;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.execution.Location;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.execution.buffer.TestingPagesSerdeFactory;
 import com.facebook.presto.metadata.RemoteTransactionHandle;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.operator.ExchangeOperator.ExchangeOperatorFactory;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.split.RemoteSplit;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
-import io.airlift.http.client.HttpClient;
-import io.airlift.http.client.testing.TestingHttpClient;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import org.testng.annotations.AfterClass;
@@ -36,7 +37,6 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -44,13 +44,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.operator.ExchangeOperator.REMOTE_CONNECTOR_ID;
 import static com.facebook.presto.operator.PageAssertions.assertPageEquals;
 import static com.facebook.presto.operator.TestingTaskBuffer.PAGE;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.TestingTaskContext.createTaskContext;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static org.testng.Assert.assertEquals;
@@ -63,9 +63,9 @@ public class TestExchangeOperator
     private static final List<Type> TYPES = ImmutableList.of(VARCHAR);
     private static final PagesSerdeFactory SERDE_FACTORY = new TestingPagesSerdeFactory();
 
-    private static final String TASK_1_ID = "task1";
-    private static final String TASK_2_ID = "task2";
-    private static final String TASK_3_ID = "task3";
+    private static final String TASK_1_ID = "task1.0.0.0";
+    private static final String TASK_2_ID = "task2.0.0.0";
+    private static final String TASK_3_ID = "task3.0.0.0";
 
     private final LoadingCache<String, TestingTaskBuffer> taskBuffers = CacheBuilder.newBuilder().build(CacheLoader.from(TestingTaskBuffer::new));
 
@@ -90,7 +90,10 @@ public class TestExchangeOperator
                 3,
                 new Duration(1, TimeUnit.MINUTES),
                 true,
+                false,
+                0.2,
                 httpClient,
+                new TestingDriftClient<>(),
                 scheduler,
                 systemMemoryUsageListener,
                 pageBufferClientCallbackExecutor);
@@ -143,7 +146,7 @@ public class TestExchangeOperator
 
     private static Split newRemoteSplit(String taskId)
     {
-        return new Split(REMOTE_CONNECTOR_ID, new RemoteTransactionHandle(), new RemoteSplit(URI.create("http://localhost/" + taskId), TaskId.valueOf(taskId)));
+        return new Split(REMOTE_CONNECTOR_ID, new RemoteTransactionHandle(), new RemoteSplit(new Location("http://localhost/" + taskId), TaskId.valueOf(taskId)));
     }
 
     @Test
@@ -276,7 +279,7 @@ public class TestExchangeOperator
                 break;
             }
 
-            if (operator.getOperatorContext().getDriverContext().getPipelineContext().getPipelineStats().getSystemMemoryReservation().toBytes() > 0) {
+            if (operator.getOperatorContext().getDriverContext().getPipelineContext().getPipelineStats().getSystemMemoryReservationInBytes() > 0) {
                 greaterThanZero = true;
                 break;
             }

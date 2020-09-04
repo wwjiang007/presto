@@ -15,17 +15,18 @@ package com.facebook.presto.cassandra;
 
 import com.datastax.driver.core.PreparedStatement;
 import com.datastax.driver.core.querybuilder.Insert;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.ConnectorPageSink;
-import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
-import org.joda.time.format.DateTimeFormatter;
-import org.joda.time.format.ISODateTimeFormat;
 
 import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -35,16 +36,16 @@ import java.util.concurrent.TimeUnit;
 
 import static com.datastax.driver.core.querybuilder.QueryBuilder.bindMarker;
 import static com.datastax.driver.core.querybuilder.QueryBuilder.insertInto;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.TimestampType.TIMESTAMP;
+import static com.facebook.presto.common.type.VarbinaryType.VARBINARY;
+import static com.facebook.presto.common.type.Varchars.isVarcharType;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Float.intBitsToFloat;
 import static java.lang.Math.toIntExact;
@@ -54,7 +55,7 @@ import static java.util.concurrent.CompletableFuture.completedFuture;
 public class CassandraPageSink
         implements ConnectorPageSink
 {
-    private static final DateTimeFormatter DATE_FORMATTER = ISODateTimeFormat.date().withZoneUTC();
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE.withZone(ZoneId.of("UTC"));
 
     private final CassandraSession cassandraSession;
     private final PreparedStatement insert;
@@ -129,7 +130,7 @@ public class CassandraPageSink
             values.add(intBitsToFloat(toIntExact(type.getLong(block, position))));
         }
         else if (DATE.equals(type)) {
-            values.add(DATE_FORMATTER.print(TimeUnit.DAYS.toMillis(type.getLong(block, position))));
+            values.add(DATE_FORMATTER.format(Instant.ofEpochMilli(TimeUnit.DAYS.toMillis(type.getLong(block, position)))));
         }
         else if (TIMESTAMP.equals(type)) {
             values.add(new Timestamp(type.getLong(block, position)));

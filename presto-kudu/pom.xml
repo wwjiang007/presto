@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.221-SNAPSHOT</version>
+        <version>0.241-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-kudu</artifactId>
@@ -13,7 +13,7 @@
 
     <properties>
         <air.main.basedir>${project.parent.basedir}</air.main.basedir>
-        <kudu.version>1.8.0</kudu.version>
+        <kudu.version>1.12.0</kudu.version>
     </properties>
 
     <dependencies>
@@ -21,20 +21,31 @@
             <groupId>org.apache.kudu</groupId>
             <artifactId>kudu-client</artifactId>
             <version>${kudu.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.presto.hadoop</groupId>
+            <artifactId>hadoop-apache2</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>bootstrap</artifactId>
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>json</artifactId>
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>log</artifactId>
         </dependency>
 
@@ -54,13 +65,7 @@
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
-            <artifactId>joda-to-java-time-bridge</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>configuration</artifactId>
         </dependency>
 
@@ -88,6 +93,12 @@
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-spi</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-common</artifactId>
             <scope>provided</scope>
         </dependency>
 
@@ -141,7 +152,7 @@
         </dependency>
 
         <dependency>
-            <groupId>io.airlift</groupId>
+            <groupId>com.facebook.airlift</groupId>
             <artifactId>testing</artifactId>
             <scope>test</scope>
         </dependency>

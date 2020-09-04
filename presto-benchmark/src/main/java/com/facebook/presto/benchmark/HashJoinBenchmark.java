@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.benchmark;
 
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.operator.Driver;
 import com.facebook.presto.operator.DriverContext;
@@ -25,9 +26,8 @@ import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.PagesIndex;
 import com.facebook.presto.operator.PartitionedLookupSourceFactory;
 import com.facebook.presto.operator.TaskContext;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spiller.SingleStreamSpillerFactory;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.testing.NullOutputOperator.NullOutputOperatorFactory;
 import com.google.common.collect.ImmutableList;
@@ -39,11 +39,11 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.Future;
 
+import static com.facebook.airlift.concurrent.MoreFutures.getFutureValue;
 import static com.facebook.presto.benchmark.BenchmarkQueryRunner.createLocalQueryRunner;
 import static com.facebook.presto.operator.PipelineExecutionStrategy.UNGROUPED_EXECUTION;
 import static com.facebook.presto.spiller.PartitioningSpillerFactory.unsupportedPartitioningSpillerFactory;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static java.util.Objects.requireNonNull;
 
 public class HashJoinBenchmark
@@ -92,7 +92,8 @@ public class HashJoinBenchmark
                     1_500_000,
                     new PagesIndex.TestingFactory(false),
                     false,
-                    SingleStreamSpillerFactory.unsupportedSingleStreamSpillerFactory());
+                    SingleStreamSpillerFactory.unsupportedSingleStreamSpillerFactory(),
+                    false);
 
             DriverContext driverContext = taskContext.addPipelineContext(0, false, false, false).addDriverContext();
             DriverFactory buildDriverFactory = new DriverFactory(0, false, false, ImmutableList.of(ordersTableScan, hashBuilder), OptionalInt.empty(), UNGROUPED_EXECUTION);

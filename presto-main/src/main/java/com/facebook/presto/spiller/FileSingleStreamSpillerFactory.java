@@ -13,19 +13,20 @@
  */
 package com.facebook.presto.spiller;
 
-import com.facebook.presto.execution.buffer.PagesSerde;
+import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.block.BlockEncodingSerde;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.operator.SpillContext;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.BlockEncodingSerde;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.page.PagesSerde;
+import com.facebook.presto.spi.spiller.SpillCipher;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.inject.Inject;
-import io.airlift.log.Logger;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
@@ -37,9 +38,9 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.spi.StandardErrorCode.OUT_OF_SPILL_SPACE;
 import static com.google.common.util.concurrent.MoreExecutors.listeningDecorator;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.lang.String.format;
 import static java.nio.file.Files.createDirectories;
 import static java.nio.file.Files.delete;

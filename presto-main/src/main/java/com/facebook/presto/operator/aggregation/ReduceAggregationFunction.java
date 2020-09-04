@@ -13,6 +13,10 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.bytecode.DynamicClassLoader;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlAggregationFunction;
@@ -23,22 +27,18 @@ import com.facebook.presto.operator.aggregation.state.NullableDoubleState;
 import com.facebook.presto.operator.aggregation.state.NullableLongState;
 import com.facebook.presto.operator.aggregation.state.StateCompiler;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.gen.lambda.BinaryFunctionInterface;
 import com.google.common.collect.ImmutableList;
-import io.airlift.bytecode.DynamicClassLoader;
 
 import java.lang.invoke.MethodHandle;
 import java.util.List;
 
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.INPUT_CHANNEL;
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.STATE;
 import static com.facebook.presto.operator.aggregation.AggregationUtils.generateAggregationName;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.function.Signature.typeVariable;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static java.lang.String.format;
 
@@ -131,7 +131,7 @@ public class ReduceAggregationFunction
         }
 
         AggregationMetadata metadata = new AggregationMetadata(
-                generateAggregationName(getSignature().getName(), inputType.getTypeSignature(), ImmutableList.of(inputType.getTypeSignature())),
+                generateAggregationName(getSignature().getNameSuffix(), inputType.getTypeSignature(), ImmutableList.of(inputType.getTypeSignature())),
                 createInputParameterMetadata(inputType, stateType),
                 inputMethodHandle.asType(
                         inputMethodHandle.type()
@@ -144,7 +144,7 @@ public class ReduceAggregationFunction
 
         GenericAccumulatorFactoryBinder factory = AccumulatorCompiler.generateAccumulatorFactoryBinder(metadata, classLoader);
         return new InternalAggregationFunction(
-                getSignature().getName(),
+                getSignature().getNameSuffix(),
                 ImmutableList.of(inputType),
                 ImmutableList.of(stateType),
                 stateType,

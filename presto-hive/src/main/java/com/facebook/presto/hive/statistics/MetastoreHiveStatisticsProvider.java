@@ -14,28 +14,29 @@
 
 package com.facebook.presto.hive.statistics;
 
+import com.facebook.airlift.log.Logger;
+import com.facebook.presto.common.predicate.NullableValue;
+import com.facebook.presto.common.type.DecimalType;
+import com.facebook.presto.common.type.Decimals;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.hive.HiveBasicStatistics;
 import com.facebook.presto.hive.HiveColumnHandle;
 import com.facebook.presto.hive.HivePartition;
-import com.facebook.presto.hive.PartitionStatistics;
 import com.facebook.presto.hive.metastore.DateStatistics;
 import com.facebook.presto.hive.metastore.DecimalStatistics;
 import com.facebook.presto.hive.metastore.DoubleStatistics;
 import com.facebook.presto.hive.metastore.HiveColumnStatistics;
 import com.facebook.presto.hive.metastore.IntegerStatistics;
+import com.facebook.presto.hive.metastore.PartitionStatistics;
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.predicate.NullableValue;
 import com.facebook.presto.spi.statistics.ColumnStatistics;
 import com.facebook.presto.spi.statistics.DoubleRange;
 import com.facebook.presto.spi.statistics.Estimate;
 import com.facebook.presto.spi.statistics.TableStatistics;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.Decimals;
-import com.facebook.presto.spi.type.Type;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableMap;
@@ -43,7 +44,6 @@ import com.google.common.hash.HashFunction;
 import com.google.common.primitives.Ints;
 import com.google.common.primitives.Shorts;
 import com.google.common.primitives.SignedBytes;
-import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 
 import java.math.BigDecimal;
@@ -59,22 +59,22 @@ import java.util.OptionalDouble;
 import java.util.OptionalLong;
 import java.util.Set;
 
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.Chars.isCharType;
+import static com.facebook.presto.common.type.DateType.DATE;
+import static com.facebook.presto.common.type.Decimals.isLongDecimal;
+import static com.facebook.presto.common.type.Decimals.isShortDecimal;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.IntegerType.INTEGER;
+import static com.facebook.presto.common.type.RealType.REAL;
+import static com.facebook.presto.common.type.SmallintType.SMALLINT;
+import static com.facebook.presto.common.type.TinyintType.TINYINT;
+import static com.facebook.presto.common.type.Varchars.isVarcharType;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CORRUPTED_COLUMN_STATISTICS;
 import static com.facebook.presto.hive.HivePartition.UNPARTITIONED_ID;
 import static com.facebook.presto.hive.HiveSessionProperties.getPartitionStatisticsSampleSize;
 import static com.facebook.presto.hive.HiveSessionProperties.isIgnoreCorruptedStatistics;
 import static com.facebook.presto.hive.HiveSessionProperties.isStatisticsEnabled;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.Chars.isCharType;
-import static com.facebook.presto.spi.type.DateType.DATE;
-import static com.facebook.presto.spi.type.Decimals.isLongDecimal;
-import static com.facebook.presto.spi.type.Decimals.isShortDecimal;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.IntegerType.INTEGER;
-import static com.facebook.presto.spi.type.RealType.REAL;
-import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
-import static com.facebook.presto.spi.type.TinyintType.TINYINT;
-import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -158,6 +158,7 @@ public class MetastoreHiveStatisticsProvider
     {
         TableStatistics.Builder result = TableStatistics.builder();
         result.setRowCount(Estimate.of(0));
+        result.setTotalSize(Estimate.of(0));
         columns.forEach((columnName, columnHandle) -> {
             Type columnType = columnTypes.get(columnName);
             verify(columnType != null, "columnType is missing for column: %s", columnName);
@@ -404,6 +405,15 @@ public class MetastoreHiveStatisticsProvider
 
         TableStatistics.Builder result = TableStatistics.builder();
         result.setRowCount(Estimate.of(rowCount));
+
+        OptionalDouble optionalAverageSizePerPartition = calculateAverageSizePerPartition(statistics.values());
+        if (optionalAverageSizePerPartition.isPresent()) {
+            double averageSizePerPartition = optionalAverageSizePerPartition.getAsDouble();
+            verify(averageSizePerPartition >= 0, "averageSizePerPartition must be greater than or equal to zero: %s", averageSizePerPartition);
+            double totalSize = averageSizePerPartition * queriedPartitionsCount;
+            result.setTotalSize(Estimate.of(totalSize));
+        }
+
         for (Map.Entry<String, ColumnHandle> column : columns.entrySet()) {
             String columnName = column.getKey();
             HiveColumnHandle columnHandle = (HiveColumnHandle) column.getValue();
@@ -429,6 +439,18 @@ public class MetastoreHiveStatisticsProvider
                 .filter(OptionalLong::isPresent)
                 .mapToLong(OptionalLong::getAsLong)
                 .peek(count -> verify(count >= 0, "count must be greater than or equal to zero"))
+                .average();
+    }
+
+    @VisibleForTesting
+    static OptionalDouble calculateAverageSizePerPartition(Collection<PartitionStatistics> statistics)
+    {
+        return statistics.stream()
+                .map(PartitionStatistics::getBasicStatistics)
+                .map(HiveBasicStatistics::getInMemoryDataSizeInBytes)
+                .filter(OptionalLong::isPresent)
+                .mapToLong(OptionalLong::getAsLong)
+                .peek(size -> verify(size >= 0, "size must be greater than or equal to zero"))
                 .average();
     }
 

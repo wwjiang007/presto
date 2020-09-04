@@ -13,6 +13,11 @@
  */
 package com.facebook.presto.server.remotetask;
 
+import com.facebook.airlift.concurrent.BoundedExecutor;
+import com.facebook.airlift.concurrent.ThreadPoolExecutorMBean;
+import com.facebook.airlift.http.client.HttpClient;
+import com.facebook.airlift.json.JsonCodec;
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.LocationFactory;
 import com.facebook.presto.execution.NodeTaskMap.PartitionedSplitCountTracker;
@@ -24,6 +29,7 @@ import com.facebook.presto.execution.TaskInfo;
 import com.facebook.presto.execution.TaskManagerConfig;
 import com.facebook.presto.execution.TaskStatus;
 import com.facebook.presto.execution.buffer.OutputBuffers;
+import com.facebook.presto.execution.scheduler.TableWriteInfo;
 import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.operator.ForScheduler;
@@ -31,14 +37,9 @@ import com.facebook.presto.server.InternalCommunicationConfig;
 import com.facebook.presto.server.TaskUpdateRequest;
 import com.facebook.presto.server.smile.Codec;
 import com.facebook.presto.server.smile.SmileCodec;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.Multimap;
-import io.airlift.concurrent.BoundedExecutor;
-import io.airlift.concurrent.ThreadPoolExecutorMBean;
-import io.airlift.http.client.HttpClient;
-import io.airlift.json.JsonCodec;
-import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
@@ -46,14 +47,14 @@ import org.weakref.jmx.Nested;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 
-import java.util.OptionalInt;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 
+import static com.facebook.airlift.concurrent.Threads.daemonThreadsNamed;
 import static com.facebook.presto.server.smile.JsonCodecWrapper.wrapJsonCodec;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
+import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
@@ -68,8 +69,10 @@ public class HttpRemoteTaskFactory
     private final Codec<TaskStatus> taskStatusCodec;
     private final Codec<TaskInfo> taskInfoCodec;
     private final Codec<TaskUpdateRequest> taskUpdateRequestCodec;
+    private final Codec<PlanFragment> planFragmentCodec;
     private final Duration maxErrorDuration;
     private final Duration taskStatusRefreshMaxWait;
+    private final Duration taskInfoRefreshMaxWait;
     private final Duration taskInfoUpdateInterval;
     private final ExecutorService coreExecutor;
     private final Executor executor;
@@ -78,9 +81,11 @@ public class HttpRemoteTaskFactory
     private final ScheduledExecutorService errorScheduledExecutor;
     private final RemoteTaskStats stats;
     private final boolean isBinaryTransportEnabled;
+    private final int maxTaskUpdateSizeInBytes;
 
     @Inject
-    public HttpRemoteTaskFactory(QueryManagerConfig config,
+    public HttpRemoteTaskFactory(
+            QueryManagerConfig config,
             TaskManagerConfig taskConfig,
             @ForScheduler HttpClient httpClient,
             LocationFactory locationFactory,
@@ -90,6 +95,8 @@ public class HttpRemoteTaskFactory
             SmileCodec<TaskInfo> taskInfoSmileCodec,
             JsonCodec<TaskUpdateRequest> taskUpdateRequestJsonCodec,
             SmileCodec<TaskUpdateRequest> taskUpdateRequestSmileCodec,
+            JsonCodec<PlanFragment> planFragmentJsonCodec,
+            SmileCodec<PlanFragment> planFragmentSmileCodec,
             RemoteTaskStats stats,
             InternalCommunicationConfig communicationConfig)
     {
@@ -98,11 +105,13 @@ public class HttpRemoteTaskFactory
         this.maxErrorDuration = config.getRemoteTaskMaxErrorDuration();
         this.taskStatusRefreshMaxWait = taskConfig.getStatusRefreshMaxWait();
         this.taskInfoUpdateInterval = taskConfig.getInfoUpdateInterval();
+        this.taskInfoRefreshMaxWait = taskConfig.getInfoRefreshMaxWait();
         this.coreExecutor = newCachedThreadPool(daemonThreadsNamed("remote-task-callback-%s"));
         this.executor = new BoundedExecutor(coreExecutor, config.getRemoteTaskMaxCallbackThreads());
         this.executorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) coreExecutor);
         this.stats = requireNonNull(stats, "stats is null");
         isBinaryTransportEnabled = requireNonNull(communicationConfig, "communicationConfig is null").isBinaryTransportEnabled();
+        this.maxTaskUpdateSizeInBytes = toIntExact(requireNonNull(communicationConfig, "communicationConfig is null").getMaxTaskUpdateSize().toBytes());
 
         if (isBinaryTransportEnabled) {
             this.taskStatusCodec = taskStatusSmileCodec;
@@ -114,6 +123,7 @@ public class HttpRemoteTaskFactory
             this.taskInfoCodec = wrapJsonCodec(taskInfoJsonCodec);
             this.taskUpdateRequestCodec = wrapJsonCodec(taskUpdateRequestJsonCodec);
         }
+        this.planFragmentCodec = wrapJsonCodec(planFragmentJsonCodec);
 
         this.updateScheduledExecutor = newSingleThreadScheduledExecutor(daemonThreadsNamed("task-info-update-scheduler-%s"));
         this.errorScheduledExecutor = newSingleThreadScheduledExecutor(daemonThreadsNamed("remote-task-error-delay-%s"));
@@ -135,23 +145,25 @@ public class HttpRemoteTaskFactory
     }
 
     @Override
-    public RemoteTask createRemoteTask(Session session,
+    public RemoteTask createRemoteTask(
+            Session session,
             TaskId taskId,
             InternalNode node,
             PlanFragment fragment,
             Multimap<PlanNodeId, Split> initialSplits,
-            OptionalInt totalPartitions,
             OutputBuffers outputBuffers,
             PartitionedSplitCountTracker partitionedSplitCountTracker,
-            boolean summarizeTaskInfo)
+            boolean summarizeTaskInfo,
+            TableWriteInfo tableWriteInfo)
     {
-        return new HttpRemoteTask(session,
+        return new HttpRemoteTask(
+                session,
                 taskId,
                 node.getNodeIdentifier(),
+                locationFactory.createLegacyTaskLocation(node, taskId),
                 locationFactory.createTaskLocation(node, taskId),
                 fragment,
                 initialSplits,
-                totalPartitions,
                 outputBuffers,
                 httpClient,
                 executor,
@@ -159,13 +171,17 @@ public class HttpRemoteTaskFactory
                 errorScheduledExecutor,
                 maxErrorDuration,
                 taskStatusRefreshMaxWait,
+                taskInfoRefreshMaxWait,
                 taskInfoUpdateInterval,
                 summarizeTaskInfo,
                 taskStatusCodec,
                 taskInfoCodec,
                 taskUpdateRequestCodec,
+                planFragmentCodec,
                 partitionedSplitCountTracker,
                 stats,
-                isBinaryTransportEnabled);
+                isBinaryTransportEnabled,
+                tableWriteInfo,
+                maxTaskUpdateSizeInBytes);
     }
 }

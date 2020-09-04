@@ -13,22 +13,28 @@
  */
 package com.facebook.presto.verifier.framework;
 
+import com.facebook.airlift.event.client.EventClient;
+import com.facebook.airlift.log.Logger;
 import com.facebook.presto.sql.parser.ParsingException;
 import com.facebook.presto.sql.parser.SqlParser;
+import com.facebook.presto.verifier.annotation.ForControl;
+import com.facebook.presto.verifier.annotation.ForTest;
 import com.facebook.presto.verifier.event.VerifierQueryEvent;
 import com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus;
 import com.facebook.presto.verifier.source.SourceQuerySupplier;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.event.client.EventClient;
-import io.airlift.log.Logger;
 
+import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -37,14 +43,18 @@ import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.FAILED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.FAILED_RESOLVED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SKIPPED;
 import static com.facebook.presto.verifier.event.VerifierQueryEvent.EventStatus.SUCCEEDED;
-import static com.facebook.presto.verifier.framework.JdbcDriverUtil.initializeDrivers;
 import static com.facebook.presto.verifier.framework.QueryType.Category.DATA_PRODUCING;
+import static com.facebook.presto.verifier.framework.SkippedReason.CUSTOM_FILTER;
+import static com.facebook.presto.verifier.framework.SkippedReason.MISMATCHED_QUERY_TYPE;
+import static com.facebook.presto.verifier.framework.SkippedReason.SYNTAX_ERROR;
+import static com.facebook.presto.verifier.framework.SkippedReason.UNSUPPORTED_QUERY_TYPE;
 import static com.facebook.presto.verifier.framework.VerifierUtil.PARSING_OPTIONS;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.Thread.currentThread;
@@ -61,24 +71,22 @@ public class VerificationManager
     private final Set<EventClient> eventClients;
     private final List<Predicate<SourceQuery>> customQueryFilters;
 
-    private final Optional<String> additionalJdbcDriverPath;
-    private final Optional<String> controlJdbcDriverClass;
-    private final Optional<String> testJdbcDriverClass;
+    private final QueryConfigurationOverrides controlOverrides;
+    private final QueryConfigurationOverrides testOverrides;
 
-    private final Optional<String> controlCatalogOverride;
-    private final Optional<String> controlSchemaOverride;
-    private final Optional<String> controlUsernameOverride;
-    private final Optional<String> controlPasswordOverride;
-    private final Optional<String> testCatalogOverride;
-    private final Optional<String> testSchemaOverride;
-    private final Optional<String> testUsernameOverride;
-    private final Optional<String> testPasswordOverride;
+    private final String testId;
 
     private final Optional<Set<String>> whitelist;
     private final Optional<Set<String>> blacklist;
     private final int maxConcurrency;
     private final int suiteRepetitions;
     private final int queryRepetitions;
+    private int verificationResubmissionLimit;
+    private boolean skipControl;
+
+    private ExecutorService executor;
+    private CompletionService<VerificationResult> completionService;
+    private AtomicInteger queriesSubmitted = new AtomicInteger();
 
     @Inject
     public VerificationManager(
@@ -87,6 +95,8 @@ public class VerificationManager
             SqlParser sqlParser,
             Set<EventClient> eventClients,
             List<Predicate<SourceQuery>> customQueryFilters,
+            @ForControl QueryConfigurationOverrides controlOverrides,
+            @ForTest QueryConfigurationOverrides testOverrides,
             VerifierConfig config)
     {
         this.sourceQuerySupplier = requireNonNull(sourceQuerySupplier, "sourceQuerySupplier is null");
@@ -95,29 +105,25 @@ public class VerificationManager
         this.eventClients = ImmutableSet.copyOf(eventClients);
         this.customQueryFilters = requireNonNull(customQueryFilters, "customQueryFilters is null");
 
-        this.additionalJdbcDriverPath = requireNonNull(config.getAdditionalJdbcDriverPath(), "additionalJdbcDriverPath is null");
-        this.controlJdbcDriverClass = requireNonNull(config.getControlJdbcDriverClass(), "controlJdbcDriverClass is null");
-        this.testJdbcDriverClass = requireNonNull(config.getTestJdbcDriverClass(), "testJdbcDriverClass is null");
+        this.controlOverrides = requireNonNull(controlOverrides, "controlOverrides is null");
+        this.testOverrides = requireNonNull(testOverrides, "testOverride is null");
 
-        this.controlCatalogOverride = requireNonNull(config.getControlCatalogOverride(), "controlCatalogOverride is null");
-        this.controlSchemaOverride = requireNonNull(config.getControlSchemaOverride(), "controlSchemaOverride is null");
-        this.controlUsernameOverride = requireNonNull(config.getControlUsernameOverride(), "controlUsernameOverride is null");
-        this.controlPasswordOverride = requireNonNull(config.getControlPasswordOverride(), "controlPasswordOverride is null");
-        this.testCatalogOverride = requireNonNull(config.getTestCatalogOverride(), "testCatalogOverride is null");
-        this.testSchemaOverride = requireNonNull(config.getTestSchemaOverride(), "testSchemaOverride is null");
-        this.testUsernameOverride = requireNonNull(config.getTestUsernameOverride(), "testUsernameOverride is null");
-        this.testPasswordOverride = requireNonNull(config.getTestPasswordOverride(), "testPasswordOverride is null");
+        this.testId = requireNonNull(config.getTestId(), "testId is null");
 
         this.whitelist = requireNonNull(config.getWhitelist(), "whitelist is null");
         this.blacklist = requireNonNull(config.getBlacklist(), "blacklist is null");
         this.maxConcurrency = config.getMaxConcurrency();
         this.suiteRepetitions = config.getSuiteRepetitions();
         this.queryRepetitions = config.getQueryRepetitions();
+        this.verificationResubmissionLimit = config.getVerificationResubmissionLimit();
+        this.skipControl = config.isSkipControl();
     }
 
+    @PostConstruct
     public void start()
     {
-        initializeDrivers(additionalJdbcDriverPath, controlJdbcDriverClass, testJdbcDriverClass);
+        this.executor = newFixedThreadPool(maxConcurrency);
+        this.completionService = new ExecutorCompletionService<>(executor);
 
         List<SourceQuery> sourceQueries = sourceQuerySupplier.get();
         log.info("Total Queries: %s", sourceQueries.size());
@@ -127,11 +133,8 @@ public class VerificationManager
         sourceQueries = filterQueryType(sourceQueries);
         sourceQueries = applyCustomFilters(sourceQueries);
 
-        CompletionService<Optional<VerifierQueryEvent>> completionService = submitSourceQueriesForVerification(sourceQueries);
-        int queriesSubmitted = sourceQueries.size() * suiteRepetitions * queryRepetitions;
-        log.info("Queries submitted: %s", queriesSubmitted);
-
-        reportProgressUntilFinished(completionService, queriesSubmitted);
+        submit(sourceQueries);
+        reportProgressUntilFinished();
     }
 
     @PreDestroy
@@ -147,6 +150,23 @@ public class VerificationManager
                 }
             }
         }
+        executor.shutdownNow();
+    }
+
+    private void resubmit(Verification verification)
+    {
+        SourceQuery sourceQuery = verification.getSourceQuery();
+        VerificationContext newContext = verification.getVerificationContext();
+        Verification newVerification = verificationFactory.get(sourceQuery, Optional.of(newContext));
+        completionService.submit(newVerification::run);
+        queriesSubmitted.addAndGet(1);
+        log.info("Verification %s failed, resubmitted for verification (%s/%s)", sourceQuery.getName(), newContext.getResubmissionCount(), verificationResubmissionLimit);
+    }
+
+    @VisibleForTesting
+    AtomicInteger getQueriesSubmitted()
+    {
+        return queriesSubmitted;
     }
 
     private List<SourceQuery> applyOverrides(List<SourceQuery> sourceQueries)
@@ -157,18 +177,8 @@ public class VerificationManager
                         sourceQuery.getName(),
                         sourceQuery.getControlQuery(),
                         sourceQuery.getTestQuery(),
-                        new QueryConfiguration(
-                                testCatalogOverride.orElse(sourceQuery.getTestConfiguration().getCatalog()),
-                                testSchemaOverride.orElse(sourceQuery.getTestConfiguration().getSchema()),
-                                testUsernameOverride.orElse(sourceQuery.getTestConfiguration().getUsername()),
-                                Optional.ofNullable(testPasswordOverride.orElse(sourceQuery.getTestConfiguration().getPassword().orElse(null))),
-                                sourceQuery.getTestConfiguration().getSessionProperties()),
-                        new QueryConfiguration(
-                                controlCatalogOverride.orElse(sourceQuery.getControlConfiguration().getCatalog()),
-                                controlSchemaOverride.orElse(sourceQuery.getControlConfiguration().getSchema()),
-                                controlUsernameOverride.orElse(sourceQuery.getControlConfiguration().getUsername()),
-                                Optional.ofNullable(controlPasswordOverride.orElse(sourceQuery.getControlConfiguration().getPassword().orElse(null))),
-                                sourceQuery.getControlConfiguration().getSessionProperties())))
+                        sourceQuery.getControlConfiguration().applyOverrides(controlOverrides),
+                        sourceQuery.getTestConfiguration().applyOverrides(testOverrides)))
                 .collect(toImmutableList());
     }
 
@@ -203,14 +213,23 @@ public class VerificationManager
             try {
                 QueryType controlQueryType = QueryType.of(sqlParser.createStatement(sourceQuery.getControlQuery(), PARSING_OPTIONS));
                 QueryType testQueryType = QueryType.of(sqlParser.createStatement(sourceQuery.getTestQuery(), PARSING_OPTIONS));
-                if (controlQueryType == testQueryType && controlQueryType.getCategory() == DATA_PRODUCING) {
+
+                if (controlQueryType != testQueryType) {
+                    postEvent(VerifierQueryEvent.skipped(sourceQuery.getSuite(), testId, sourceQuery, MISMATCHED_QUERY_TYPE, skipControl));
+                }
+                else if (controlQueryType.getCategory() != DATA_PRODUCING) {
+                    postEvent(VerifierQueryEvent.skipped(sourceQuery.getSuite(), testId, sourceQuery, UNSUPPORTED_QUERY_TYPE, skipControl));
+                }
+                else {
                     selected.add(sourceQuery);
                 }
             }
             catch (ParsingException e) {
                 log.warn("Failed to parse query: %s", sourceQuery.getName());
+                postEvent(VerifierQueryEvent.skipped(sourceQuery.getSuite(), testId, sourceQuery, SYNTAX_ERROR, skipControl));
             }
             catch (UnsupportedQueryTypeException ignored) {
+                postEvent(VerifierQueryEvent.skipped(sourceQuery.getSuite(), testId, sourceQuery, UNSUPPORTED_QUERY_TYPE, skipControl));
             }
         }
         List<SourceQuery> selectQueries = selected.build();
@@ -225,53 +244,61 @@ public class VerificationManager
         }
 
         log.info("Applying custom query filters");
+        sourceQueries = new ArrayList<>(sourceQueries);
         for (Predicate<SourceQuery> filter : customQueryFilters) {
-            sourceQueries = sourceQueries.stream()
-                    .filter(filter::test)
-                    .collect(toImmutableList());
+            Iterator<SourceQuery> iterator = sourceQueries.iterator();
+            while (iterator.hasNext()) {
+                SourceQuery sourceQuery = iterator.next();
+                if (!filter.test(sourceQuery)) {
+                    iterator.remove();
+                    postEvent(VerifierQueryEvent.skipped(sourceQuery.getSuite(), testId, sourceQuery, CUSTOM_FILTER, skipControl));
+                }
+            }
             log.info("Applying custom filter %s... Remaining queries: %s", filter.getClass().getSimpleName(), sourceQueries.size());
         }
         return sourceQueries;
     }
 
-    private CompletionService<Optional<VerifierQueryEvent>> submitSourceQueriesForVerification(List<SourceQuery> sourceQueries)
+    private void submit(List<SourceQuery> sourceQueries)
     {
-        ExecutorService executor = newFixedThreadPool(maxConcurrency);
-        CompletionService<Optional<VerifierQueryEvent>> completionService = new ExecutorCompletionService<>(executor);
         for (int i = 0; i < suiteRepetitions; i++) {
             for (SourceQuery sourceQuery : sourceQueries) {
                 for (int j = 0; j < queryRepetitions; j++) {
-                    Verification verification = verificationFactory.get(sourceQuery);
+                    Verification verification = verificationFactory.get(sourceQuery, Optional.empty());
                     completionService.submit(verification::run);
                 }
             }
         }
-        executor.shutdown();
-        return completionService;
+        int queriesSubmitted = sourceQueries.size() * suiteRepetitions * queryRepetitions;
+        log.info("Queries submitted: %s", queriesSubmitted);
+        this.queriesSubmitted.addAndGet(queriesSubmitted);
     }
 
-    private void reportProgressUntilFinished(CompletionService<Optional<VerifierQueryEvent>> completionService, int queriesSubmitted)
+    private void reportProgressUntilFinished()
     {
         int completed = 0;
         double lastProgress = 0;
         Map<EventStatus, Integer> statusCount = new EnumMap<>(EventStatus.class);
 
-        while (completed < queriesSubmitted) {
+        while (completed < queriesSubmitted.get()) {
             try {
-                Optional<VerifierQueryEvent> event = completionService.take().get();
+                VerificationResult result = completionService.take().get();
+                Optional<VerifierQueryEvent> event = result.getEvent();
                 completed++;
                 if (!event.isPresent()) {
                     statusCount.compute(SKIPPED, (status, count) -> count == null ? 1 : count + 1);
                 }
                 else {
                     statusCount.compute(EventStatus.valueOf(event.get().getStatus()), (status, count) -> count == null ? 1 : count + 1);
-                    for (EventClient eventClient : eventClients) {
-                        eventClient.post(event.get());
-                    }
+                    postEvent(event.get());
                 }
 
-                double progress = ((double) completed) / queriesSubmitted * 100;
-                if (progress - lastProgress > 0.5 || completed == queriesSubmitted) {
+                if (result.shouldResubmit()) {
+                    resubmit(result.getVerification());
+                }
+
+                double progress = ((double) completed) / queriesSubmitted.get() * 100;
+                if (progress - lastProgress > 0.5 || completed == queriesSubmitted.get()) {
                     log.info(
                             "Progress: %s succeeded, %s skipped, %s resolved, %s failed, %.2f%% done",
                             statusCount.getOrDefault(SUCCEEDED, 0),
@@ -289,6 +316,13 @@ public class VerificationManager
             catch (ExecutionException e) {
                 throw new RuntimeException(e);
             }
+        }
+    }
+
+    private void postEvent(VerifierQueryEvent event)
+    {
+        for (EventClient eventClient : eventClients) {
+            eventClient.post(event);
         }
     }
 }

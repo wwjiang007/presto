@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.plugin.geospatial;
 
-import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.type.AbstractLongType;
-import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.AbstractLongType;
+import com.facebook.presto.common.type.TypeSignature;
 
 public class BingTileType
         extends AbstractLongType
@@ -36,7 +36,7 @@ public class BingTileType
     }
 
     @Override
-    public Object getObjectValue(ConnectorSession session, Block block, int position)
+    public Object getObjectValue(SqlFunctionProperties properties, Block block, int position)
     {
         if (block.isNull(position)) {
             return null;

@@ -14,20 +14,20 @@
 package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.annotation.UsedByGeneratedCode;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlOperator;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
 
 import java.lang.invoke.MethodHandle;
 
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
-import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.common.function.OperatorType.CAST;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.function.Signature.typeVariable;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 
 public final class CastFromUnknownOperator
@@ -46,13 +46,13 @@ public final class CastFromUnknownOperator
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(
+    public BuiltInScalarFunctionImplementation specialize(
             BoundVariables boundVariables, int arity, TypeManager typeManager,
             FunctionManager functionManager)
     {
         Type toType = boundVariables.getTypeVariable("E");
         MethodHandle methodHandle = METHOD_HANDLE_NON_NULL.asType(METHOD_HANDLE_NON_NULL.type().changeReturnType(toType.getJavaType()));
-        return new ScalarFunctionImplementation(
+        return new BuiltInScalarFunctionImplementation(
                 false,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
                 methodHandle);

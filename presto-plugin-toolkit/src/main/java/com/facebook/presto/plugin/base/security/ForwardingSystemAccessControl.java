@@ -13,9 +13,10 @@
  */
 package com.facebook.presto.plugin.base.security;
 
-import com.facebook.presto.spi.CatalogSchemaName;
+import com.facebook.presto.common.CatalogSchemaName;
 import com.facebook.presto.spi.CatalogSchemaTableName;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.security.AccessControlContext;
 import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
@@ -47,158 +48,164 @@ public abstract class ForwardingSystemAccessControl
     protected abstract SystemAccessControl delegate();
 
     @Override
-    public void checkCanSetUser(Optional<Principal> principal, String userName)
+    public void checkCanSetUser(AccessControlContext context, Optional<Principal> principal, String userName)
     {
-        delegate().checkCanSetUser(principal, userName);
+        delegate().checkCanSetUser(context, principal, userName);
     }
 
     @Override
-    public void checkCanSetSystemSessionProperty(Identity identity, String propertyName)
+    public void checkQueryIntegrity(Identity identity, AccessControlContext context, String query)
     {
-        delegate().checkCanSetSystemSessionProperty(identity, propertyName);
+        delegate().checkQueryIntegrity(identity, context, query);
     }
 
     @Override
-    public void checkCanAccessCatalog(Identity identity, String catalogName)
+    public void checkCanSetSystemSessionProperty(Identity identity, AccessControlContext context, String propertyName)
     {
-        delegate().checkCanAccessCatalog(identity, catalogName);
+        delegate().checkCanSetSystemSessionProperty(identity, context, propertyName);
     }
 
     @Override
-    public Set<String> filterCatalogs(Identity identity, Set<String> catalogs)
+    public void checkCanAccessCatalog(Identity identity, AccessControlContext context, String catalogName)
     {
-        return delegate().filterCatalogs(identity, catalogs);
+        delegate().checkCanAccessCatalog(identity, context, catalogName);
     }
 
     @Override
-    public void checkCanCreateSchema(Identity identity, CatalogSchemaName schema)
+    public Set<String> filterCatalogs(Identity identity, AccessControlContext context, Set<String> catalogs)
     {
-        delegate().checkCanCreateSchema(identity, schema);
+        return delegate().filterCatalogs(identity, context, catalogs);
     }
 
     @Override
-    public void checkCanDropSchema(Identity identity, CatalogSchemaName schema)
+    public void checkCanCreateSchema(Identity identity, AccessControlContext context, CatalogSchemaName schema)
     {
-        delegate().checkCanDropSchema(identity, schema);
+        delegate().checkCanCreateSchema(identity, context, schema);
     }
 
     @Override
-    public void checkCanRenameSchema(Identity identity, CatalogSchemaName schema, String newSchemaName)
+    public void checkCanDropSchema(Identity identity, AccessControlContext context, CatalogSchemaName schema)
     {
-        delegate().checkCanRenameSchema(identity, schema, newSchemaName);
+        delegate().checkCanDropSchema(identity, context, schema);
     }
 
     @Override
-    public void checkCanShowSchemas(Identity identity, String catalogName)
+    public void checkCanRenameSchema(Identity identity, AccessControlContext context, CatalogSchemaName schema, String newSchemaName)
     {
-        delegate().checkCanShowSchemas(identity, catalogName);
+        delegate().checkCanRenameSchema(identity, context, schema, newSchemaName);
     }
 
     @Override
-    public Set<String> filterSchemas(Identity identity, String catalogName, Set<String> schemaNames)
+    public void checkCanShowSchemas(Identity identity, AccessControlContext context, String catalogName)
     {
-        return delegate().filterSchemas(identity, catalogName, schemaNames);
+        delegate().checkCanShowSchemas(identity, context, catalogName);
     }
 
     @Override
-    public void checkCanCreateTable(Identity identity, CatalogSchemaTableName table)
+    public Set<String> filterSchemas(Identity identity, AccessControlContext context, String catalogName, Set<String> schemaNames)
     {
-        delegate().checkCanCreateTable(identity, table);
+        return delegate().filterSchemas(identity, context, catalogName, schemaNames);
     }
 
     @Override
-    public void checkCanDropTable(Identity identity, CatalogSchemaTableName table)
+    public void checkCanCreateTable(Identity identity, AccessControlContext context, CatalogSchemaTableName table)
     {
-        delegate().checkCanDropTable(identity, table);
+        delegate().checkCanCreateTable(identity, context, table);
     }
 
     @Override
-    public void checkCanRenameTable(Identity identity, CatalogSchemaTableName table, CatalogSchemaTableName newTable)
+    public void checkCanDropTable(Identity identity, AccessControlContext context, CatalogSchemaTableName table)
     {
-        delegate().checkCanRenameTable(identity, table, newTable);
+        delegate().checkCanDropTable(identity, context, table);
     }
 
     @Override
-    public void checkCanShowTablesMetadata(Identity identity, CatalogSchemaName schema)
+    public void checkCanRenameTable(Identity identity, AccessControlContext context, CatalogSchemaTableName table, CatalogSchemaTableName newTable)
     {
-        delegate().checkCanShowTablesMetadata(identity, schema);
+        delegate().checkCanRenameTable(identity, context, table, newTable);
     }
 
     @Override
-    public Set<SchemaTableName> filterTables(Identity identity, String catalogName, Set<SchemaTableName> tableNames)
+    public void checkCanShowTablesMetadata(Identity identity, AccessControlContext context, CatalogSchemaName schema)
     {
-        return delegate().filterTables(identity, catalogName, tableNames);
+        delegate().checkCanShowTablesMetadata(identity, context, schema);
     }
 
     @Override
-    public void checkCanAddColumn(Identity identity, CatalogSchemaTableName table)
+    public Set<SchemaTableName> filterTables(Identity identity, AccessControlContext context, String catalogName, Set<SchemaTableName> tableNames)
     {
-        delegate().checkCanAddColumn(identity, table);
+        return delegate().filterTables(identity, context, catalogName, tableNames);
     }
 
     @Override
-    public void checkCanDropColumn(Identity identity, CatalogSchemaTableName table)
+    public void checkCanAddColumn(Identity identity, AccessControlContext context, CatalogSchemaTableName table)
     {
-        delegate().checkCanDropColumn(identity, table);
+        delegate().checkCanAddColumn(identity, context, table);
     }
 
     @Override
-    public void checkCanRenameColumn(Identity identity, CatalogSchemaTableName table)
+    public void checkCanDropColumn(Identity identity, AccessControlContext context, CatalogSchemaTableName table)
     {
-        delegate().checkCanRenameColumn(identity, table);
+        delegate().checkCanDropColumn(identity, context, table);
     }
 
     @Override
-    public void checkCanSelectFromColumns(Identity identity, CatalogSchemaTableName table, Set<String> columns)
+    public void checkCanRenameColumn(Identity identity, AccessControlContext context, CatalogSchemaTableName table)
     {
-        delegate().checkCanSelectFromColumns(identity, table, columns);
+        delegate().checkCanRenameColumn(identity, context, table);
     }
 
     @Override
-    public void checkCanInsertIntoTable(Identity identity, CatalogSchemaTableName table)
+    public void checkCanSelectFromColumns(Identity identity, AccessControlContext context, CatalogSchemaTableName table, Set<String> columns)
     {
-        delegate().checkCanInsertIntoTable(identity, table);
+        delegate().checkCanSelectFromColumns(identity, context, table, columns);
     }
 
     @Override
-    public void checkCanDeleteFromTable(Identity identity, CatalogSchemaTableName table)
+    public void checkCanInsertIntoTable(Identity identity, AccessControlContext context, CatalogSchemaTableName table)
     {
-        delegate().checkCanDeleteFromTable(identity, table);
+        delegate().checkCanInsertIntoTable(identity, context, table);
     }
 
     @Override
-    public void checkCanCreateView(Identity identity, CatalogSchemaTableName view)
+    public void checkCanDeleteFromTable(Identity identity, AccessControlContext context, CatalogSchemaTableName table)
     {
-        delegate().checkCanCreateView(identity, view);
+        delegate().checkCanDeleteFromTable(identity, context, table);
     }
 
     @Override
-    public void checkCanDropView(Identity identity, CatalogSchemaTableName view)
+    public void checkCanCreateView(Identity identity, AccessControlContext context, CatalogSchemaTableName view)
     {
-        delegate().checkCanDropView(identity, view);
+        delegate().checkCanCreateView(identity, context, view);
     }
 
     @Override
-    public void checkCanCreateViewWithSelectFromColumns(Identity identity, CatalogSchemaTableName table, Set<String> columns)
+    public void checkCanDropView(Identity identity, AccessControlContext context, CatalogSchemaTableName view)
     {
-        delegate().checkCanCreateViewWithSelectFromColumns(identity, table, columns);
+        delegate().checkCanDropView(identity, context, view);
     }
 
     @Override
-    public void checkCanSetCatalogSessionProperty(Identity identity, String catalogName, String propertyName)
+    public void checkCanCreateViewWithSelectFromColumns(Identity identity, AccessControlContext context, CatalogSchemaTableName table, Set<String> columns)
     {
-        delegate().checkCanSetCatalogSessionProperty(identity, catalogName, propertyName);
+        delegate().checkCanCreateViewWithSelectFromColumns(identity, context, table, columns);
     }
 
     @Override
-    public void checkCanGrantTablePrivilege(Identity identity, Privilege privilege, CatalogSchemaTableName table, PrestoPrincipal grantee, boolean withGrantOption)
+    public void checkCanSetCatalogSessionProperty(Identity identity, AccessControlContext context, String catalogName, String propertyName)
     {
-        delegate().checkCanGrantTablePrivilege(identity, privilege, table, grantee, withGrantOption);
+        delegate().checkCanSetCatalogSessionProperty(identity, context, catalogName, propertyName);
     }
 
     @Override
-    public void checkCanRevokeTablePrivilege(Identity identity, Privilege privilege, CatalogSchemaTableName table, PrestoPrincipal revokee, boolean grantOptionFor)
+    public void checkCanGrantTablePrivilege(Identity identity, AccessControlContext context, Privilege privilege, CatalogSchemaTableName table, PrestoPrincipal grantee, boolean withGrantOption)
     {
-        delegate().checkCanRevokeTablePrivilege(identity, privilege, table, revokee, grantOptionFor);
+        delegate().checkCanGrantTablePrivilege(identity, context, privilege, table, grantee, withGrantOption);
+    }
+
+    @Override
+    public void checkCanRevokeTablePrivilege(Identity identity, AccessControlContext context, Privilege privilege, CatalogSchemaTableName table, PrestoPrincipal revokee, boolean grantOptionFor)
+    {
+        delegate().checkCanRevokeTablePrivilege(identity, context, privilege, table, revokee, grantOptionFor);
     }
 }

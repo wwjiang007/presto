@@ -14,19 +14,19 @@
 package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.annotation.UsedByGeneratedCode;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.SingleRowBlockWriter;
+import com.facebook.presto.common.function.OperatorType;
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.RowType.Field;
+import com.facebook.presto.common.type.StandardTypes;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlOperator;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.SingleRowBlockWriter;
-import com.facebook.presto.spi.function.OperatorType;
-import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.RowType.Field;
-import com.facebook.presto.spi.type.StandardTypes;
-import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.util.JsonCastException;
 import com.facebook.presto.util.JsonUtil.BlockBuilderAppender;
 import com.fasterxml.jackson.core.JsonParser;
@@ -39,11 +39,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
 import static com.facebook.presto.spi.function.Signature.withVariadicBound;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static com.facebook.presto.util.JsonUtil.BlockBuilderAppender.createBlockBuilderAppender;
 import static com.facebook.presto.util.JsonUtil.JSON_FACTORY;
@@ -62,7 +62,7 @@ public class JsonToRowCast
         extends SqlOperator
 {
     public static final JsonToRowCast JSON_TO_ROW = new JsonToRowCast();
-    private static final MethodHandle METHOD_HANDLE = methodHandle(JsonToRowCast.class, "toRow", RowType.class, BlockBuilderAppender[].class, Optional.class, ConnectorSession.class, Slice.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(JsonToRowCast.class, "toRow", RowType.class, BlockBuilderAppender[].class, Optional.class, SqlFunctionProperties.class, Slice.class);
 
     private JsonToRowCast()
     {
@@ -74,7 +74,7 @@ public class JsonToRowCast
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
+    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         checkArgument(arity == 1, "Expected arity to be 1");
         RowType rowType = (RowType) boundVariables.getTypeVariable("T");
@@ -85,7 +85,7 @@ public class JsonToRowCast
                 .map(rowField -> createBlockBuilderAppender(rowField.getType()))
                 .toArray(BlockBuilderAppender[]::new);
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(rowType).bindTo(fieldAppenders).bindTo(getFieldNameToIndex(rowFields));
-        return new ScalarFunctionImplementation(
+        return new BuiltInScalarFunctionImplementation(
                 true,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
                 methodHandle);
@@ -96,7 +96,7 @@ public class JsonToRowCast
             RowType rowType,
             BlockBuilderAppender[] fieldAppenders,
             Optional<Map<String, Integer>> fieldNameToIndex,
-            ConnectorSession connectorSession,
+            SqlFunctionProperties properties,
             Slice json)
     {
         try (JsonParser jsonParser = createJsonParser(JSON_FACTORY, json)) {

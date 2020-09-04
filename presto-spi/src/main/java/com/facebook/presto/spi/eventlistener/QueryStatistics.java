@@ -14,7 +14,6 @@
 package com.facebook.presto.spi.eventlistener;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -22,10 +21,12 @@ import static java.util.Objects.requireNonNull;
 public class QueryStatistics
 {
     private final Duration cpuTime;
+    private final Duration retriedCpuTime;
     private final Duration wallTime;
     private final Duration queuedTime;
     private final Optional<Duration> analysisTime;
 
+    private final int peakRunningTasks;
     private final long peakUserMemoryBytes;
     // peak of user + system memory
     private final long peakTotalNonRevocableMemoryBytes;
@@ -38,23 +39,20 @@ public class QueryStatistics
     private final long writtenOutputBytes;
     private final long writtenOutputRows;
     private final long writtenIntermediateBytes;
+    private final long spilledBytes;
 
     private final double cumulativeMemory;
-
-    private final List<StageGcStatistics> stageGcStatistics;
 
     private final int completedSplits;
     private final boolean complete;
 
-    private final List<StageCpuDistribution> cpuTimeDistribution;
-
-    private final List<String> operatorSummaries;
-
     public QueryStatistics(
             Duration cpuTime,
+            Duration retriedCpuTime,
             Duration wallTime,
             Duration queuedTime,
             Optional<Duration> analysisTime,
+            int peakRunningTasks,
             long peakUserMemoryBytes,
             long peakTotalNonRevocableMemoryBytes,
             long peakTaskUserMemory,
@@ -66,17 +64,17 @@ public class QueryStatistics
             long writtenOutputBytes,
             long writtenOutputRows,
             long writtenIntermediateBytes,
+            long spilledBytes,
             double cumulativeMemory,
-            List<StageGcStatistics> stageGcStatistics,
             int completedSplits,
-            boolean complete,
-            List<StageCpuDistribution> cpuTimeDistribution,
-            List<String> operatorSummaries)
+            boolean complete)
     {
         this.cpuTime = requireNonNull(cpuTime, "cpuTime is null");
+        this.retriedCpuTime = requireNonNull(retriedCpuTime, "retriedCpuTime is null");
         this.wallTime = requireNonNull(wallTime, "wallTime is null");
         this.queuedTime = requireNonNull(queuedTime, "queuedTime is null");
         this.analysisTime = requireNonNull(analysisTime, "analysisTime is null");
+        this.peakRunningTasks = peakRunningTasks;
         this.peakUserMemoryBytes = peakUserMemoryBytes;
         this.peakTotalNonRevocableMemoryBytes = peakTotalNonRevocableMemoryBytes;
         this.peakTaskUserMemory = peakTaskUserMemory;
@@ -88,17 +86,20 @@ public class QueryStatistics
         this.writtenOutputBytes = writtenOutputBytes;
         this.writtenOutputRows = writtenOutputRows;
         this.writtenIntermediateBytes = writtenIntermediateBytes;
+        this.spilledBytes = spilledBytes;
         this.cumulativeMemory = cumulativeMemory;
-        this.stageGcStatistics = requireNonNull(stageGcStatistics, "stageGcStatistics is null");
         this.completedSplits = completedSplits;
         this.complete = complete;
-        this.cpuTimeDistribution = requireNonNull(cpuTimeDistribution, "cpuTimeDistribution is null");
-        this.operatorSummaries = requireNonNull(operatorSummaries, "operatorSummaries is null");
     }
 
     public Duration getCpuTime()
     {
         return cpuTime;
+    }
+
+    public Duration getRetriedCpuTime()
+    {
+        return retriedCpuTime;
     }
 
     public Duration getWallTime()
@@ -114,6 +115,11 @@ public class QueryStatistics
     public Optional<Duration> getAnalysisTime()
     {
         return analysisTime;
+    }
+
+    public int getPeakRunningTasks()
+    {
+        return peakRunningTasks;
     }
 
     public long getPeakUserMemoryBytes()
@@ -171,14 +177,14 @@ public class QueryStatistics
         return writtenIntermediateBytes;
     }
 
+    public long getSpilledBytes()
+    {
+        return spilledBytes;
+    }
+
     public double getCumulativeMemory()
     {
         return cumulativeMemory;
-    }
-
-    public List<StageGcStatistics> getStageGcStatistics()
-    {
-        return stageGcStatistics;
     }
 
     public int getCompletedSplits()
@@ -189,15 +195,5 @@ public class QueryStatistics
     public boolean isComplete()
     {
         return complete;
-    }
-
-    public List<StageCpuDistribution> getCpuTimeDistribution()
-    {
-        return cpuTimeDistribution;
-    }
-
-    public List<String> getOperatorSummaries()
-    {
-        return operatorSummaries;
     }
 }

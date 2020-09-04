@@ -14,13 +14,13 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockEncodingSerde;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.BlockEncodingSerde;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.MapType;
+import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.Type;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
@@ -34,19 +34,19 @@ import java.util.Map.Entry;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-import static com.facebook.presto.block.BlockSerdeUtil.writeBlock;
+import static com.facebook.airlift.testing.Assertions.assertInstanceOf;
+import static com.facebook.presto.common.block.BlockSerdeUtil.writeBlock;
+import static com.facebook.presto.common.block.SortOrder.ASC_NULLS_FIRST;
+import static com.facebook.presto.common.block.SortOrder.ASC_NULLS_LAST;
+import static com.facebook.presto.common.block.SortOrder.DESC_NULLS_FIRST;
+import static com.facebook.presto.common.block.SortOrder.DESC_NULLS_LAST;
 import static com.facebook.presto.operator.OperatorAssertion.toRow;
-import static com.facebook.presto.spi.block.SortOrder.ASC_NULLS_FIRST;
-import static com.facebook.presto.spi.block.SortOrder.ASC_NULLS_LAST;
-import static com.facebook.presto.spi.block.SortOrder.DESC_NULLS_FIRST;
-import static com.facebook.presto.spi.block.SortOrder.DESC_NULLS_LAST;
 import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
 import static com.facebook.presto.type.TypeUtils.hashPosition;
 import static com.facebook.presto.type.TypeUtils.positionEqualsPosition;
 import static com.facebook.presto.util.StructuralTestUtil.arrayBlockOf;
 import static com.facebook.presto.util.StructuralTestUtil.mapBlockOf;
 import static com.google.common.base.Preconditions.checkState;
-import static io.airlift.testing.Assertions.assertInstanceOf;
 import static java.util.Collections.unmodifiableSortedMap;
 import static java.util.Objects.requireNonNull;
 import static org.testng.Assert.assertEquals;
@@ -141,7 +141,7 @@ public abstract class AbstractTestType
 
     private void assertPositionValue(Block block, int position, Object expectedStackValue, long expectedHash, Object expectedObjectValue)
     {
-        Object objectValue = type.getObjectValue(SESSION, block, position);
+        Object objectValue = type.getObjectValue(SESSION.getSqlFunctionProperties(), block, position);
         assertEquals(objectValue, expectedObjectValue);
         if (objectValue != null) {
             assertInstanceOf(objectValue, objectValueType);
@@ -330,13 +330,13 @@ public abstract class AbstractTestType
     private void verifyInvalidPositionHandling(Block block)
     {
         try {
-            type.getObjectValue(SESSION, block, -1);
+            type.getObjectValue(SESSION.getSqlFunctionProperties(), block, -1);
             fail("expected RuntimeException");
         }
         catch (RuntimeException expected) {
         }
         try {
-            type.getObjectValue(SESSION, block, block.getPositionCount());
+            type.getObjectValue(SESSION.getSqlFunctionProperties(), block, block.getPositionCount());
             fail("expected RuntimeException");
         }
         catch (RuntimeException expected) {
@@ -583,7 +583,7 @@ public abstract class AbstractTestType
     {
         SortedMap<Integer, Object> values = new TreeMap<>();
         for (int position = 0; position < block.getPositionCount(); position++) {
-            values.put(position, type.getObjectValue(SESSION, block, position));
+            values.put(position, type.getObjectValue(SESSION.getSqlFunctionProperties(), block, position));
         }
         return unmodifiableSortedMap(values);
     }

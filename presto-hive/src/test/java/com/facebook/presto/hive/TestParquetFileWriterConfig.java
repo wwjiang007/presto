@@ -20,9 +20,9 @@ import parquet.hadoop.ParquetWriter;
 
 import java.util.Map;
 
-import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
-import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
-import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
+import static com.facebook.airlift.configuration.testing.ConfigAssertions.recordDefaults;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 
@@ -32,6 +32,7 @@ public class TestParquetFileWriterConfig
     public void testDefaults()
     {
         assertRecordedDefaults(recordDefaults(ParquetFileWriterConfig.class)
+                .setParquetOptimizedWriterEnabled(false)
                 .setBlockSize(new DataSize(ParquetWriter.DEFAULT_BLOCK_SIZE, BYTE))
                 .setPageSize(new DataSize(ParquetWriter.DEFAULT_PAGE_SIZE, BYTE)));
     }
@@ -40,11 +41,13 @@ public class TestParquetFileWriterConfig
     public void testExplicitPropertyMappings()
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
+                .put("hive.parquet.optimized-writer.enabled", "true")
                 .put("hive.parquet.writer.block-size", "234MB")
                 .put("hive.parquet.writer.page-size", "11MB")
                 .build();
 
         ParquetFileWriterConfig expected = new ParquetFileWriterConfig()
+                .setParquetOptimizedWriterEnabled(true)
                 .setBlockSize(new DataSize(234, MEGABYTE))
                 .setPageSize(new DataSize(11, MEGABYTE));
 

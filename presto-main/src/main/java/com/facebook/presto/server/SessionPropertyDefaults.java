@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.server;
 
+import com.facebook.airlift.log.Logger;
+import com.facebook.airlift.node.NodeInfo;
 import com.facebook.presto.Session;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupId;
 import com.facebook.presto.spi.resourceGroups.SessionPropertyConfigurationManagerContext;
@@ -20,8 +22,6 @@ import com.facebook.presto.spi.session.SessionConfigurationContext;
 import com.facebook.presto.spi.session.SessionPropertyConfigurationManager;
 import com.facebook.presto.spi.session.SessionPropertyConfigurationManagerFactory;
 import com.google.common.annotations.VisibleForTesting;
-import io.airlift.log.Logger;
-import io.airlift.node.NodeInfo;
 
 import javax.inject.Inject;
 
@@ -84,7 +84,7 @@ public class SessionPropertyDefaults
     public void setConfigurationManager(String name, Map<String, String> properties)
     {
         SessionPropertyConfigurationManagerFactory factory = factories.get(name);
-        checkState(factory != null, "Session property configuration manager %s is not registered");
+        checkState(factory != null, "Session property configuration manager '%s' is not registered", name);
 
         SessionPropertyConfigurationManager manager = factory.create(properties, configurationManagerContext);
         checkState(delegate.compareAndSet(null, manager), "sessionPropertyConfigurationManager is already set");

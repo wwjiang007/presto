@@ -13,6 +13,13 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.function.QualifiedFunctionName;
+import com.facebook.presto.common.type.ArrayType;
+import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.TypeManager;
 import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.FunctionManager;
@@ -20,19 +27,14 @@ import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.project.PageProcessor;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.Signature;
+import com.facebook.presto.spi.function.SqlFunctionVisibility;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.LambdaDefinitionExpression;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
 import com.google.common.base.Verify;
@@ -60,16 +62,18 @@ import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.common.function.OperatorType.GREATER_THAN;
+import static com.facebook.presto.common.type.BigintType.BIGINT;
+import static com.facebook.presto.common.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.common.type.TypeUtils.readNativeValue;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
 import static com.facebook.presto.operator.scalar.BenchmarkArrayFilter.ExactArrayFilterFunction.EXACT_ARRAY_FILTER_FUNCTION;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
-import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static com.facebook.presto.operator.scalar.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.function.Signature.typeVariable;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
+import static com.facebook.presto.spi.function.SqlFunctionVisibility.PUBLIC;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.relational.Expressions.constant;
@@ -103,7 +107,7 @@ public class BenchmarkArrayFilter
     {
         return ImmutableList.copyOf(
                 data.getPageProcessor().process(
-                        SESSION,
+                        SESSION.getSqlFunctionProperties(),
                         new DriverYieldSignal(),
                         newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
                         data.getPage()));
@@ -124,7 +128,7 @@ public class BenchmarkArrayFilter
         {
             MetadataManager metadata = MetadataManager.createTestMetadataManager();
             FunctionManager functionManager = metadata.getFunctionManager();
-            metadata.addFunctions(new FunctionListBuilder().function(EXACT_ARRAY_FILTER_FUNCTION).getFunctions());
+            metadata.registerBuiltInFunctions(new FunctionListBuilder().function(EXACT_ARRAY_FILTER_FUNCTION).getFunctions());
             ExpressionCompiler compiler = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0));
             ImmutableList.Builder<RowExpression> projectionsBuilder = ImmutableList.builder();
             Block[] blocks = new Block[TYPES.size()];
@@ -143,7 +147,7 @@ public class BenchmarkArrayFilter
             }
 
             ImmutableList<RowExpression> projections = projectionsBuilder.build();
-            pageProcessor = compiler.compilePageProcessor(Optional.empty(), projections).get();
+            pageProcessor = compiler.compilePageProcessor(SESSION.getSqlFunctionProperties(), Optional.empty(), projections).get();
             page = new Page(blocks);
         }
 
@@ -201,7 +205,7 @@ public class BenchmarkArrayFilter
         private ExactArrayFilterFunction()
         {
             super(new Signature(
-                    "exact_filter",
+                    QualifiedFunctionName.of(DEFAULT_NAMESPACE, "exact_filter"),
                     FunctionKind.SCALAR,
                     ImmutableList.of(typeVariable("T")),
                     ImmutableList.of(),
@@ -211,9 +215,9 @@ public class BenchmarkArrayFilter
         }
 
         @Override
-        public boolean isHidden()
+        public SqlFunctionVisibility getVisibility()
         {
-            return false;
+            return PUBLIC;
         }
 
         @Override
@@ -229,10 +233,10 @@ public class BenchmarkArrayFilter
         }
 
         @Override
-        public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
+        public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
         {
             Type type = boundVariables.getTypeVariable("T");
-            return new ScalarFunctionImplementation(
+            return new BuiltInScalarFunctionImplementation(
                     false,
                     ImmutableList.of(
                             valueTypeArgumentProperty(RETURN_NULL_ON_NULL),

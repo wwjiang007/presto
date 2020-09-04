@@ -13,16 +13,21 @@
  */
 package com.facebook.presto.spi.relation;
 
+import com.facebook.presto.common.function.SqlFunctionProperties;
+import com.facebook.presto.common.relation.Predicate;
+import com.facebook.presto.spi.api.Experimental;
+
 import java.util.function.Supplier;
 
 /**
- * @apiNote An experimental API to allow Hive connector to implement smart
+ * An experimental API to allow Hive connector to implement smart
  * filtering on the encoded data to avoid materializing data unnecessarily.
  */
+@Experimental
 public interface PredicateCompiler
 {
     /**
      * Predicate expression may not contain any variable references, only input references.
      */
-    Supplier<Predicate> compilePredicate(RowExpression predicate);
+    Supplier<Predicate> compilePredicate(SqlFunctionProperties sqlFunctionProperties, RowExpression predicate);
 }

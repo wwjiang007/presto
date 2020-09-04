@@ -13,17 +13,17 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.block.Block;
+import com.facebook.presto.common.block.BlockBuilder;
+import com.facebook.presto.common.block.DictionaryBlock;
+import com.facebook.presto.common.type.MapType;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.project.PageProcessor;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.DictionaryBlock;
 import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.relation.RowExpression;
-import com.facebook.presto.spi.type.MapType;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
 import com.google.common.collect.ImmutableList;
@@ -52,10 +52,10 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.block.BlockAssertions.createSlicesBlock;
+import static com.facebook.presto.common.type.DoubleType.DOUBLE;
+import static com.facebook.presto.common.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.sql.relational.Expressions.field;
 import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
@@ -79,7 +79,7 @@ public class BenchmarkMapConcat
     {
         return ImmutableList.copyOf(
                 data.getPageProcessor().process(
-                        SESSION,
+                        SESSION.getSqlFunctionProperties(),
                         new DriverYieldSignal(),
                         newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
                         data.getPage()));
@@ -146,7 +146,7 @@ public class BenchmarkMapConcat
                     ImmutableList.of(field(0, mapType), field(1, mapType))));
 
             ImmutableList<RowExpression> projections = projectionsBuilder.build();
-            pageProcessor = compiler.compilePageProcessor(Optional.empty(), projections).get();
+            pageProcessor = compiler.compilePageProcessor(SESSION.getSqlFunctionProperties(), Optional.empty(), projections).get();
             page = new Page(leftBlock, rightBlock);
         }
 
@@ -167,7 +167,7 @@ public class BenchmarkMapConcat
             for (int i = 0; i < offsets.length; i++) {
                 offsets[i] = mapSize * i;
             }
-            return mapType.createBlockFromKeyValue(Optional.empty(), offsets, keyBlock, valueBlock);
+            return mapType.createBlockFromKeyValue(positionCount, Optional.empty(), offsets, keyBlock, valueBlock);
         }
 
         private static Block createKeyBlock(int positionCount, List<String> keys)

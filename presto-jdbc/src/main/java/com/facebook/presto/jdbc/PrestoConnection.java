@@ -75,7 +75,6 @@ public class PrestoConnection
     private final AtomicBoolean readOnly = new AtomicBoolean();
     private final AtomicReference<String> catalog = new AtomicReference<>();
     private final AtomicReference<String> schema = new AtomicReference<>();
-    private final AtomicReference<String> path = new AtomicReference<>();
     private final AtomicReference<String> timeZoneId = new AtomicReference<>();
     private final AtomicReference<Locale> locale = new AtomicReference<>();
     private final AtomicReference<Integer> networkTimeoutMillis = new AtomicReference<>(Ints.saturatedCast(MINUTES.toMillis(2)));
@@ -85,9 +84,10 @@ public class PrestoConnection
     private final URI jdbcUri;
     private final URI httpUri;
     private final String user;
+    private final Map<String, String> extraCredentials;
+    private final Map<String, String> sessionProperties;
     private final Optional<String> applicationNamePrefix;
     private final Map<String, String> clientInfo = new ConcurrentHashMap<>();
-    private final Map<String, String> sessionProperties = new ConcurrentHashMap<>();
     private final Map<String, String> preparedStatements = new ConcurrentHashMap<>();
     private final Map<String, SelectedRole> roles = new ConcurrentHashMap<>();
     private final AtomicReference<String> transactionId = new AtomicReference<>();
@@ -105,6 +105,8 @@ public class PrestoConnection
         this.user = uri.getUser();
         this.applicationNamePrefix = uri.getApplicationNamePrefix();
 
+        this.extraCredentials = uri.getExtraCredentials();
+        this.sessionProperties = new ConcurrentHashMap<>(uri.getSessionProperties());
         this.queryExecutor = requireNonNull(queryExecutor, "queryExecutor is null");
 
         timeZoneId.set(TimeZone.getDefault().getID());
@@ -626,6 +628,17 @@ public class PrestoConnection
         return user;
     }
 
+    @VisibleForTesting
+    Map<String, String> getExtraCredentials()
+    {
+        return ImmutableMap.copyOf(extraCredentials);
+    }
+
+    Map<String, String> getSessionProperties()
+    {
+        return ImmutableMap.copyOf(sessionProperties);
+    }
+
     ServerInfo getServerInfo()
             throws SQLException
     {
@@ -688,13 +701,13 @@ public class PrestoConnection
                 clientInfo.get("ClientInfo"),
                 catalog.get(),
                 schema.get(),
-                path.get(),
                 timeZoneId.get(),
                 locale.get(),
                 ImmutableMap.of(),
                 ImmutableMap.copyOf(allProperties),
                 ImmutableMap.copyOf(preparedStatements),
                 ImmutableMap.copyOf(roles),
+                extraCredentials,
                 transactionId.get(),
                 timeout);
 
@@ -711,7 +724,6 @@ public class PrestoConnection
 
         client.getSetCatalog().ifPresent(catalog::set);
         client.getSetSchema().ifPresent(schema::set);
-        client.getSetPath().ifPresent(path::set);
 
         if (client.getStartedTransactionId() != null) {
             transactionId.set(client.getStartedTransactionId());

@@ -14,11 +14,12 @@
 package com.facebook.presto.execution.buffer;
 
 import com.facebook.presto.block.BlockAssertions;
+import com.facebook.presto.common.Page;
+import com.facebook.presto.common.type.Type;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.facebook.presto.operator.PageAssertions;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.page.PagesSerde;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.units.DataSize;
@@ -29,9 +30,9 @@ import java.util.Optional;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
+import static com.facebook.airlift.concurrent.MoreFutures.tryGetFutureValue;
 import static com.facebook.presto.execution.buffer.TestingPagesSerdeFactory.testingPagesSerde;
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.airlift.concurrent.MoreFutures.tryGetFutureValue;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
